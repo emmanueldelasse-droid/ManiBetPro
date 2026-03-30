@@ -1,28 +1,21 @@
 /**
- * MANI BET PRO — provider.nba.js
+ * MANI BET PRO — provider.nba.js v2
  *
- * Provider NBA avec deux sources et fallback automatique.
+ * Provider NBA — deux sources :
+ * Source A : BallDontLie  — matchs du jour, wins/losses basiques
+ * Source B : stats.nba.com — stats avancées (net rating, pace, eFG%, TS%)
  *
- * Source A : BallDontLie API (v1) — gratuite, non officielle
- *   Doc : https://www.balldontlie.io/
- *   Toutes les requêtes transitent par le Cloudflare Worker.
- *
- * Source B : NBA Stats (stats.nba.com) — non officielle, instable
- *   Headers spécifiques requis — gérés côté Worker.
- *
+ * Toutes les requêtes transitent par le Cloudflare Worker.
  * Aucune clé API côté front.
- * Aucune donnée fictive retournée.
- * Si une donnée est indisponible, le champ est null avec flag source.
+ * Si une donnée est indisponible → null explicite, jamais inventé.
  */
 
-import { API_CONFIG } from '../config/api.config.js';
+import { API_CONFIG }   from '../config/api.config.js';
 import { ProviderCache } from './provider.cache.js';
-import { Logger } from '../utils/utils.logger.js';
+import { Logger }        from '../utils/utils.logger.js';
 
-const WORKER = API_CONFIG.WORKER_BASE_URL;
-const TIMEOUT = API_CONFIG.TIMEOUTS.DEFAULT;
-
-// Identifiants providers pour logs et quotas
+const WORKER     = API_CONFIG.WORKER_BASE_URL;
+const TIMEOUT    = API_CONFIG.TIMEOUTS.DEFAULT;
 const PROVIDER_A = 'BALLDONTLIE';
 const PROVIDER_B = 'NBA_STATS';
 
@@ -30,235 +23,243 @@ export class ProviderNBA {
 
   // ── MATCHS DU JOUR ────────────────────────────────────────────────────
 
-  /**
-   * Récupère les matchs NBA d'une date donnée.
-   * @param {string} date — format YYYY-MM-DD
-   * @returns {Promise<NBAMatchList|null>}
-   */
   static async getMatchesToday(date) {
     const cacheKey = ProviderCache.buildKey('nba', 'matches', { date });
-    const cached = ProviderCache.get(cacheKey);
-    if (cached) {
-      Logger.apiCall({ provider: PROVIDER_A, endpoint: '/nba/matches', statusCode: 200, cached: true });
-      return cached;
-    }
-
-    // Tentative source A
-    let result = await this._fetchMatchesSourceA(date);
-
-    // Fallback source B si A échoue
-    if (!result) {
-      Logger.warn('NBA_FALLBACK_SOURCE_B', { date, reason: 'Source A failed' });
-      result = await this._fetchMatchesSourceB(date);
-    }
-
-    if (result) {
-      ProviderCache.set(cacheKey, result, 'RECENT_FORM');
-    }
-
-    return result;
-  }
-
-  // ── STATS ÉQUIPE ──────────────────────────────────────────────────────
-
-  /**
-   * Récupère les stats d'une équipe.
-   * @param {string} teamId
-   * @param {'SEASON'|'LAST_5'|'LAST_10'|'HOME'|'AWAY'} statType
-   * @param {string} season — ex: '2024-25'
-   * @returns {Promise<NBATeamStats|null>}
-   */
-  static async getTeamStats(teamId, statType, season) {
-    const cacheKey = ProviderCache.buildKey('nba', 'team_stats', { teamId, statType, season });
-    const cached = ProviderCache.get(cacheKey);
-    if (cached) {
-      Logger.apiCall({ provider: PROVIDER_A, endpoint: `/nba/team/${teamId}/stats`, statusCode: 200, cached: true });
-      return cached;
-    }
-
-    const ttlType = statType === 'SEASON' ? 'SEASON_STATS' : 'RECENT_FORM';
-
-    let result = await this._fetchTeamStatsSourceA(teamId, statType, season);
-    if (!result) {
-      result = await this._fetchTeamStatsSourceB(teamId, statType, season);
-    }
-
-    if (result) {
-      ProviderCache.set(cacheKey, result, ttlType);
-    }
-
-    return result;
-  }
-
-  // ── BLESSURES / ABSENCES ──────────────────────────────────────────────
-
-  /**
-   * Récupère les blessures et absences connues.
-   * @param {string} teamId
-   * @returns {Promise<NBAInjuries|null>}
-   */
-  static async getInjuries(teamId) {
-    const cacheKey = ProviderCache.buildKey('nba', 'injuries', { teamId });
-    const cached = ProviderCache.get(cacheKey);
+    const cached   = ProviderCache.get(cacheKey);
     if (cached) return cached;
 
-    let result = await this._fetchInjuriesSourceA(teamId);
-    if (!result) {
-      result = await this._fetchInjuriesSourceB(teamId);
+    const data = await this._fetch(
+      `${WORKER}/nba/matches?date=${date}`,
+      PROVIDER_A, '/nba/matches'
+    );
+
+    if (!data) return null;
+
+    const result = this._normalizeMatches(data, date);
+    if (result) ProviderCache.set(cacheKey, result, 'RECENT_FORM');
+    return result;
+  }
+
+  // ── STATS BASIQUES (wins/losses) — BallDontLie ───────────────────────
+
+  static async getTeamStats(teamId, statType, season) {
+    const cacheKey = ProviderCache.buildKey('nba', 'stats', { teamId, statType, season });
+    const cached   = ProviderCache.get(cacheKey);
+    if (cached) return cached;
+
+    const ttl  = statType === 'SEASON' ? 'SEASON_STATS' : 'RECENT_FORM';
+    const data = await this._fetch(
+      `${WORKER}/nba/team/${teamId}/stats?type=${statType}&season=${season}`,
+      PROVIDER_A, `/nba/team/${teamId}/stats`
+    );
+
+    if (!data) return null;
+
+    const result = {
+      team_id:      teamId,
+      stat_type:    statType,
+      source:       PROVIDER_A,
+      fetched_at:   new Date().toISOString(),
+      games_sample: data.games_played ?? null,
+      stats: {
+        net_rating:        null,   // Pas disponible BallDontLie gratuit
+        offensive_rating:  null,
+        defensive_rating:  null,
+        pace:              null,
+        efg_pct:           null,
+        ts_pct:            null,
+        tov_pct:           null,
+        orb_pct:           null,
+        wins:              data.wins    ?? null,
+        losses:            data.losses  ?? null,
+        win_pct:           data.win_pct ?? null,
+      },
+      matches: data.matches ?? null,
+    };
+
+    ProviderCache.set(cacheKey, result, ttl);
+    return result;
+  }
+
+  // ── STATS AVANCÉES — stats.nba.com ────────────────────────────────────
+
+  /**
+   * Récupère les stats avancées depuis stats.nba.com via le Worker.
+   * Net rating, pace, eFG%, TS%, TOV%, ORB%, PIE.
+   *
+   * @param {string} teamId — ID BallDontLie (à mapper vers ID NBA Stats)
+   * @param {string} season — ex: "2025"
+   * @returns {Promise<NBAAdvancedStats|null>}
+   */
+  static async getTeamAdvancedStats(teamId, season) {
+    // Convertir l'ID BallDontLie vers l'ID stats.nba.com
+    const nbaStatsId = this._mapTeamId(teamId);
+    if (!nbaStatsId) {
+      Logger.warn('NBA_TEAM_ID_NOT_MAPPED', { teamId });
+      return this._buildEmptyAdvanced(teamId);
     }
 
-    if (result) {
-      ProviderCache.set(cacheKey, result, 'INJURIES');
+    const cacheKey = ProviderCache.buildKey('nba', 'advanced', { teamId: nbaStatsId, season });
+    const cached   = ProviderCache.get(cacheKey);
+    if (cached) return cached;
+
+    const data = await this._fetch(
+      `${WORKER}/nba/team/${nbaStatsId}/advanced?season=${season}`,
+      PROVIDER_B, `/nba/team/${nbaStatsId}/advanced`
+    );
+
+    if (!data) return this._buildEmptyAdvanced(teamId);
+
+    const result = {
+      team_id:      teamId,
+      nba_stats_id: nbaStatsId,
+      source:       PROVIDER_B,
+      fetched_at:   new Date().toISOString(),
+      available:    data.available ?? false,
+      games_sample: data.games_played ?? null,
+      stats: {
+        net_rating:        data.net_rating       ?? null,
+        offensive_rating:  data.offensive_rating ?? null,
+        defensive_rating:  data.defensive_rating ?? null,
+        pace:              data.pace             ?? null,
+        efg_pct:           data.efg_pct          ?? null,
+        ts_pct:            data.ts_pct           ?? null,
+        tov_pct:           data.tov_pct          ?? null,
+        orb_pct:           data.orb_pct          ?? null,
+        wins:              data.wins             ?? null,
+        losses:            data.losses           ?? null,
+        win_pct:           data.win_pct          ?? null,
+        pie:               data.pie              ?? null,
+      },
+    };
+
+    if (data.available) {
+      ProviderCache.set(cacheKey, result, 'SEASON_STATS');
     }
 
     return result;
   }
 
-  // ── SOURCE A : BALLDONTLIE ────────────────────────────────────────────
+  // ── FORME RÉCENTE (derniers matchs) ──────────────────────────────────
 
-  static async _fetchMatchesSourceA(date) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_A);
-      if (!quota.allowed) {
-        Logger.warn('NBA_QUOTA_EXCEEDED', { provider: PROVIDER_A });
-        return null;
-      }
+  /**
+   * Récupère les N derniers matchs pour calculer l'EMA de forme.
+   * @param {string} teamId
+   * @param {string} season
+   * @param {number} n — 5 ou 10
+   */
+  static async getRecentForm(teamId, season, n = 10) {
+    const statType = n <= 5 ? 'LAST_5' : 'LAST_10';
+    const cacheKey = ProviderCache.buildKey('nba', 'recent', { teamId, season, n });
+    const cached   = ProviderCache.get(cacheKey);
+    if (cached) return cached;
 
-      const url = `${WORKER}${API_CONFIG.ROUTES.NBA.MATCHES_TODAY}?date=${date}&source=balldontlie`;
-      const data = await this._fetch(url, PROVIDER_A, '/nba/matches');
+    const data = await this._fetch(
+      `${WORKER}/nba/team/${teamId}/stats?type=${statType}&season=${season}`,
+      PROVIDER_A, `/nba/team/${teamId}/stats`
+    );
 
-      if (!data) return null;
+    if (!data) return null;
 
-      return this._normalizeMatchesSourceA(data, date);
+    // Transformer les matchs en série won/lost pour l'EMA
+    const matches = (data.matches ?? []).map(game => {
+      const isHome    = String(game.home_team?.id) === String(teamId);
+      const teamScore = isHome ? game.home_team_score    : game.visitor_team_score;
+      const oppScore  = isHome ? game.visitor_team_score : game.home_team_score;
+      return {
+        date:    game.date,
+        won:     teamScore > oppScore,
+        margin:  teamScore - oppScore,
+      };
+    });
 
-    } catch (err) {
-      Logger.error('NBA_SOURCE_A_MATCHES_ERROR', { message: err.message, date });
-      return null;
-    }
+    const result = {
+      team_id:    teamId,
+      source:     PROVIDER_A,
+      fetched_at: new Date().toISOString(),
+      matches,
+    };
+
+    ProviderCache.set(cacheKey, result, 'RECENT_FORM');
+    return result;
   }
 
-  static async _fetchTeamStatsSourceA(teamId, statType, season) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_A);
-      if (!quota.allowed) return null;
+  // ── BLESSURES ─────────────────────────────────────────────────────────
 
-      const endpoint = API_CONFIG.ROUTES.NBA.TEAM_STATS
-        .replace(':id', teamId);
-      const url = `${WORKER}${endpoint}?type=${statType}&season=${season}&source=balldontlie`;
-      const data = await this._fetch(url, PROVIDER_A, endpoint);
+  static async getInjuries(teamId) {
+    const cacheKey = ProviderCache.buildKey('nba', 'injuries', { teamId });
+    const cached   = ProviderCache.get(cacheKey);
+    if (cached) return cached;
 
-      if (!data) return null;
-      return this._normalizeTeamStatsSourceA(data, teamId, statType);
+    const data = await this._fetch(
+      `${WORKER}/nba/injuries?teamId=${teamId}`,
+      PROVIDER_A, '/nba/injuries'
+    );
 
-    } catch (err) {
-      Logger.error('NBA_SOURCE_A_STATS_ERROR', { message: err.message, teamId });
-      return null;
-    }
+    if (!data) return { team_id: teamId, players: [], available: false };
+
+    ProviderCache.set(cacheKey, data, 'INJURIES');
+    return data;
   }
 
-  static async _fetchInjuriesSourceA(teamId) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_A);
-      if (!quota.allowed) return null;
+  // ── MAPPING IDs BALLDONTLIE → NBA STATS ──────────────────────────────
+  //
+  // BallDontLie et stats.nba.com utilisent des IDs différents.
+  // Ce mapping est basé sur la saison 2024-25 — à vérifier si des équipes
+  // changent d'ID entre saisons.
 
-      const url = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?teamId=${teamId}&source=balldontlie`;
-      const data = await this._fetch(url, PROVIDER_A, '/nba/injuries');
+  static _mapTeamId(bdlId) {
+    const MAP = {
+      '1':  '1610612737',   // Atlanta Hawks
+      '2':  '1610612738',   // Boston Celtics
+      '3':  '1610612751',   // Brooklyn Nets
+      '4':  '1610612766',   // Charlotte Hornets
+      '5':  '1610612741',   // Chicago Bulls
+      '6':  '1610612739',   // Cleveland Cavaliers
+      '7':  '1610612742',   // Dallas Mavericks
+      '8':  '1610612743',   // Denver Nuggets
+      '9':  '1610612765',   // Detroit Pistons
+      '10': '1610612744',   // Golden State Warriors
+      '11': '1610612745',   // Houston Rockets
+      '12': '1610612754',   // Indiana Pacers
+      '13': '1610612746',   // LA Clippers
+      '14': '1610612747',   // Los Angeles Lakers
+      '15': '1610612763',   // Memphis Grizzlies
+      '16': '1610612748',   // Miami Heat
+      '17': '1610612749',   // Milwaukee Bucks
+      '18': '1610612750',   // Minnesota Timberwolves
+      '19': '1610612740',   // New Orleans Pelicans
+      '20': '1610612752',   // New York Knicks
+      '21': '1610612760',   // Oklahoma City Thunder
+      '22': '1610612753',   // Orlando Magic
+      '23': '1610612755',   // Philadelphia 76ers
+      '24': '1610612756',   // Phoenix Suns
+      '25': '1610612757',   // Portland Trail Blazers
+      '26': '1610612758',   // Sacramento Kings
+      '27': '1610612759',   // San Antonio Spurs
+      '28': '1610612761',   // Toronto Raptors
+      '29': '1610612762',   // Utah Jazz
+      '30': '1610612764',   // Washington Wizards
+    };
 
-      if (!data) return null;
-      return this._normalizeInjuriesSourceA(data, teamId);
-
-    } catch (err) {
-      Logger.error('NBA_SOURCE_A_INJURIES_ERROR', { message: err.message, teamId });
-      return null;
-    }
-  }
-
-  // ── SOURCE B : NBA STATS ──────────────────────────────────────────────
-
-  static async _fetchMatchesSourceB(date) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_B);
-      if (!quota.allowed) return null;
-
-      const url = `${WORKER}${API_CONFIG.ROUTES.NBA.MATCHES_TODAY}?date=${date}&source=nbastats`;
-      const data = await this._fetch(url, PROVIDER_B, '/nba/matches');
-
-      if (!data) return null;
-      return this._normalizeMatchesSourceB(data, date);
-
-    } catch (err) {
-      Logger.error('NBA_SOURCE_B_MATCHES_ERROR', { message: err.message, date });
-      return null;
-    }
-  }
-
-  static async _fetchTeamStatsSourceB(teamId, statType, season) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_B);
-      if (!quota.allowed) return null;
-
-      const endpoint = API_CONFIG.ROUTES.NBA.TEAM_STATS.replace(':id', teamId);
-      const url = `${WORKER}${endpoint}?type=${statType}&season=${season}&source=nbastats`;
-      const data = await this._fetch(url, PROVIDER_B, endpoint);
-
-      if (!data) return null;
-      return this._normalizeTeamStatsSourceB(data, teamId, statType);
-
-    } catch (err) {
-      Logger.error('NBA_SOURCE_B_STATS_ERROR', { message: err.message, teamId });
-      return null;
-    }
-  }
-
-  static async _fetchInjuriesSourceB(teamId) {
-    try {
-      const quota = ProviderCache.incrementQuota(PROVIDER_B);
-      if (!quota.allowed) return null;
-
-      const url = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?teamId=${teamId}&source=nbastats`;
-      const data = await this._fetch(url, PROVIDER_B, '/nba/injuries');
-
-      if (!data) return null;
-      return this._normalizeInjuriesSourceB(data, teamId);
-
-    } catch (err) {
-      Logger.error('NBA_SOURCE_B_INJURIES_ERROR', { message: err.message, teamId });
-      return null;
-    }
+    return MAP[String(bdlId)] ?? null;
   }
 
   // ── NORMALISATEURS ────────────────────────────────────────────────────
-  //
-  // Chaque source retourne un format différent.
-  // Les normalisateurs produisent un format unifié.
-  // Si un champ est absent dans la source → null explicite.
-  // Jamais de valeur inventée.
 
-  /**
-   * Format unifié d'un match NBA.
-   * @typedef {object} NBAMatch
-   * @property {string} id
-   * @property {string} date
-   * @property {string} status
-   * @property {object} home_team
-   * @property {object} away_team
-   * @property {string} source
-   * @property {string} fetched_at
-   */
-
-  static _normalizeMatchesSourceA(data, date) {
+  static _normalizeMatches(data, date) {
     if (!data?.data || !Array.isArray(data.data)) return null;
 
     return {
       date,
-      source: PROVIDER_A,
+      source:     PROVIDER_A,
       fetched_at: new Date().toISOString(),
       matches: data.data.map(game => ({
-        id:            String(game.id ?? ''),
-        date:          game.date ?? date,
-        status:        game.status ?? null,
-        time:          game.time ?? null,
-        period:        game.period ?? null,
+        id:     String(game.id ?? ''),
+        date:   game.date ?? date,
+        status: game.status ?? null,
+        time:   game.time ?? null,
+        period: game.period ?? null,
         home_team: {
           id:           String(game.home_team?.id ?? ''),
           name:         game.home_team?.full_name ?? null,
@@ -271,132 +272,24 @@ export class ProviderNBA {
           abbreviation: game.visitor_team?.abbreviation ?? null,
           score:        game.visitor_team_score ?? null,
         },
-        source: PROVIDER_A,
+        source:     PROVIDER_A,
         fetched_at: new Date().toISOString(),
       })),
     };
   }
 
-  static _normalizeMatchesSourceB(data, date) {
-    // NBA Stats retourne un format différent via le Worker
-    // Le Worker normalise partiellement — structure attendue documentée ici
-    if (!data?.games || !Array.isArray(data.games)) return null;
-
-    return {
-      date,
-      source: PROVIDER_B,
-      fetched_at: new Date().toISOString(),
-      matches: data.games.map(game => ({
-        id:            String(game.gameId ?? ''),
-        date:          game.gameDate ?? date,
-        status:        game.gameStatus ?? null,
-        time:          game.gameStatusText ?? null,
-        period:        game.period ?? null,
-        home_team: {
-          id:           String(game.homeTeam?.teamId ?? ''),
-          name:         game.homeTeam?.teamName ?? null,
-          abbreviation: game.homeTeam?.teamTricode ?? null,
-          score:        game.homeTeam?.score ?? null,
-        },
-        away_team: {
-          id:           String(game.awayTeam?.teamId ?? ''),
-          name:         game.awayTeam?.teamName ?? null,
-          abbreviation: game.awayTeam?.teamTricode ?? null,
-          score:        game.awayTeam?.score ?? null,
-        },
-        source: PROVIDER_B,
-        fetched_at: new Date().toISOString(),
-      })),
-    };
-  }
-
-  /**
-   * Format unifié des stats équipe.
-   * Tous les champs non trouvés → null (jamais inventés).
-   */
-  static _normalizeTeamStatsSourceA(data, teamId, statType) {
-    if (!data) return null;
-
-    return {
-      team_id:      teamId,
-      stat_type:    statType,
-      source:       PROVIDER_A,
-      fetched_at:   new Date().toISOString(),
-      games_sample: data.games_played ?? null,
-      stats: {
-        net_rating:        data.net_rating        ?? null,
-        offensive_rating:  data.offensive_rating  ?? null,
-        defensive_rating:  data.defensive_rating  ?? null,
-        pace:              data.pace              ?? null,
-        efg_pct:           data.efg_pct           ?? null,
-        ts_pct:            data.ts_pct            ?? null,
-        tov_pct:           data.tov_pct           ?? null,
-        orb_pct:           data.orb_pct           ?? null,
-        wins:              data.wins              ?? null,
-        losses:            data.losses            ?? null,
-        win_pct:           data.win_pct           ?? null,
-      },
-    };
-  }
-
-  static _normalizeTeamStatsSourceB(data, teamId, statType) {
-    if (!data) return null;
-
-    return {
-      team_id:      teamId,
-      stat_type:    statType,
-      source:       PROVIDER_B,
-      fetched_at:   new Date().toISOString(),
-      games_sample: data.gamesPlayed ?? null,
-      stats: {
-        net_rating:        data.netRating        ?? null,
-        offensive_rating:  data.offRating        ?? null,
-        defensive_rating:  data.defRating        ?? null,
-        pace:              data.pace              ?? null,
-        efg_pct:           data.efgPct           ?? null,
-        ts_pct:            data.tsPct            ?? null,
-        tov_pct:           data.tovPct           ?? null,
-        orb_pct:           data.orebPct          ?? null,
-        wins:              data.wins              ?? null,
-        losses:            data.losses            ?? null,
-        win_pct:           data.winPct           ?? null,
-      },
-    };
-  }
-
-  static _normalizeInjuriesSourceA(data, teamId) {
-    if (!data?.data) return null;
-
-    return {
-      team_id:    teamId,
-      source:     PROVIDER_A,
-      fetched_at: new Date().toISOString(),
-      players: (data.data ?? []).map(p => ({
-        player_id:   String(p.player?.id ?? ''),
-        name:        p.player?.first_name && p.player?.last_name
-                       ? `${p.player.first_name} ${p.player.last_name}`
-                       : null,
-        status:      p.status ?? null,        // 'Out' | 'Questionable' | 'Probable'
-        reason:      p.notes ?? null,
-        updated_at:  p.updated_at ?? null,
-      })),
-    };
-  }
-
-  static _normalizeInjuriesSourceB(data, teamId) {
-    if (!data?.injuries) return null;
-
+  static _buildEmptyAdvanced(teamId) {
     return {
       team_id:    teamId,
       source:     PROVIDER_B,
       fetched_at: new Date().toISOString(),
-      players: (data.injuries ?? []).map(p => ({
-        player_id:   String(p.personId ?? ''),
-        name:        p.playerName ?? null,
-        status:      p.status ?? null,
-        reason:      p.description ?? null,
-        updated_at:  null,   // NBA Stats ne fournit pas toujours ce champ
-      })),
+      available:  false,
+      games_sample: null,
+      stats: {
+        net_rating: null, offensive_rating: null, defensive_rating: null,
+        pace: null, efg_pct: null, ts_pct: null, tov_pct: null,
+        orb_pct: null, wins: null, losses: null, win_pct: null, pie: null,
+      },
     };
   }
 
@@ -404,39 +297,32 @@ export class ProviderNBA {
 
   static async _fetch(url, provider, endpoint) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT);
+    const timer      = setTimeout(() => controller.abort(), TIMEOUT);
 
     try {
       const response = await fetch(url, {
-        signal: controller.signal,
+        signal:  controller.signal,
         headers: { 'Accept': 'application/json' },
       });
-
       clearTimeout(timer);
 
       Logger.apiCall({
-        provider,
-        endpoint,
+        provider, endpoint,
         statusCode: response.status,
-        cached: false,
-        error: response.ok ? null : `HTTP ${response.status}`,
+        cached:     false,
+        error:      response.ok ? null : `HTTP ${response.status}`,
       });
 
       if (!response.ok) return null;
-
       return await response.json();
 
     } catch (err) {
       clearTimeout(timer);
-
       Logger.apiCall({
-        provider,
-        endpoint,
-        statusCode: 0,
-        cached: false,
+        provider, endpoint,
+        statusCode: 0, cached: false,
         error: err.name === 'AbortError' ? 'TIMEOUT' : err.message,
       });
-
       return null;
     }
   }
