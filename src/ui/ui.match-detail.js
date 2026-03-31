@@ -705,8 +705,17 @@ Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
 
     if (!text) throw new Error('Réponse IA vide');
 
+    // Nettoyer le markdown
+    const cleanText = text
+      .replace(/^#{1,4}\s.+$/gm, '')
+      .replace(/\*\*(.+?)\*\*/g, '$1')
+      .replace(/\*(.+?)\*/g, '$1')
+      .replace(/^[-•]\s/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
     responseEl.innerHTML = `
-      <div style="line-height:1.7; white-space:pre-wrap">${escapeHtml(text)}</div>
+      <div style="line-height:1.8; white-space:pre-wrap; font-size:13px">${escapeHtml(cleanText)}</div>
       <div class="text-muted" style="font-size:10px; margin-top:var(--space-2)">
         Source : Claude Haiku · Basé uniquement sur les données du moteur
       </div>
