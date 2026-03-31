@@ -395,7 +395,7 @@ function renderBloc5(analysis, match) {
         const away = match?.away_team?.name ?? 'Extérieur';
         const side = best.side === 'HOME' ? home : best.side === 'AWAY' ? away : best.side;
         const oddsStr = best.odds_line > 0 ? `+${best.odds_line}` : String(best.odds_line);
-        return `Pari suggéré : ${side} ${best.type === 'OVER_UNDER' ? best.side : ''} ${oddsStr} (edge +${best.edge}%)`;
+        return `Pari suggéré : ${side} ${best.type === 'OVER_UNDER' ? best.side : ''} ${oddsStr} — cote sous-estimée de ${best.edge}%`;
       })()
     : null;
 
@@ -513,7 +513,7 @@ function renderBloc7(analysis, match) {
           <span class="bloc-header__title">Recommandations paris</span>
         </div>
         <div class="text-muted" style="font-size:13px;padding:var(--space-3) 0">
-          Aucun edge détecté sur les marchés disponibles pour ce match.
+          Aucune opportunité détectée sur ce match.
         </div>
       </div>`;
   }
@@ -544,11 +544,11 @@ function renderBloc7(analysis, match) {
         <div class="betting-row__stats">
           <span class="text-muted" style="font-size:11px">Moteur ${r.motor_prob}% · Bookmaker ${r.implied_prob}%</span>
           <span class="betting-row__edge" style="color:${confColor};font-size:11px;font-weight:600">
-            Edge +${r.edge}% · ${r.confidence}
+            Cote sous-estimée de ${r.edge}%
           </span>
         </div>
         ${r.note ? `<div class="text-muted" style="font-size:10px;margin-top:4px">${r.note}</div>` : ''}
-        ${isBest ? '<div style="font-size:10px;color:var(--color-success);margin-top:4px">★ Meilleure opportunité détectée</div>' : ''}
+        ${isBest ? '<div style="font-size:10px;color:var(--color-success);margin-top:4px">★ Meilleur pari du match</div>' : ''}
       </div>`;
   }).join('');
 
@@ -561,8 +561,7 @@ function renderBloc7(analysis, match) {
       </div>
 
       <div class="betting-disclaimer text-muted" style="font-size:11px;margin-bottom:var(--space-3);padding:var(--space-2);border-left:2px solid var(--color-border)">
-        Edge = écart entre la probabilité calculée par le moteur et la probabilité implicite des cotes.
-        Un edge positif ne garantit pas le résultat — il indique une opportunité statistique.
+        Le moteur compare ses calculs aux cotes du bookmaker. Une cote sous-estimée ne garantit pas le résultat, mais indique une opportunité statistique.
       </div>
 
       <div class="betting-list">
@@ -705,17 +704,8 @@ Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
 
     if (!text) throw new Error('Réponse IA vide');
 
-    // Nettoyer le markdown
-    const cleanText = text
-      .replace(/^#{1,4}\s.+$/gm, '')
-      .replace(/\*\*(.+?)\*\*/g, '$1')
-      .replace(/\*(.+?)\*/g, '$1')
-      .replace(/^[-•]\s/gm, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-
     responseEl.innerHTML = `
-      <div style="line-height:1.8; white-space:pre-wrap; font-size:13px">${escapeHtml(cleanText)}</div>
+      <div style="line-height:1.7; white-space:pre-wrap">${escapeHtml(text)}</div>
       <div class="text-muted" style="font-size:10px; margin-top:var(--space-2)">
         Source : Claude Haiku · Basé uniquement sur les données du moteur
       </div>
