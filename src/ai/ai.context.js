@@ -74,6 +74,8 @@ export class AIContextBuilder {
 
         data_quality_breakdown: dataQualityBreakdown,
 
+        betting_recommendations: analysisOutput.betting_recommendations ?? null,
+
         model_version:  analysisOutput.model_version,
         computed_at:    analysisOutput.computed_at,
       },
