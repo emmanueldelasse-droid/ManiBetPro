@@ -454,6 +454,15 @@ export class EngineNBA {
   static _computeBettingRecommendations(score, odds, matchData) {
     const recs = [];
 
+    // Normaliser les cotes (peuvent être des strings)
+    odds = {
+      ...odds,
+      home_ml:    odds.home_ml !== null ? Number(odds.home_ml) : null,
+      away_ml:    odds.away_ml !== null ? Number(odds.away_ml) : null,
+      spread:     odds.spread !== null ? Number(odds.spread) : null,
+      over_under: odds.over_under !== null ? Number(odds.over_under) : null,
+    };
+
     // Probabilité calculée par le moteur
     const pHome = score;          // P(victoire domicile)
     const pAway = 1 - score;      // P(victoire extérieur)
@@ -519,7 +528,7 @@ export class EngineNBA {
         const ouLine         = odds.over_under;
         const diff           = projectedTotal - ouLine;
 
-        if (Math.abs(diff) > 1.5) {
+        if (Math.abs(diff) > 3) {
           recs.push({
             type:        'OVER_UNDER',
             label:       'Total de points',
@@ -529,7 +538,7 @@ export class EngineNBA {
             implied_prob: Math.round(ouLine),
             edge:        Math.round(Math.abs(diff)),
             confidence:  this._edgeToConfidence(Math.abs(diff) / 20),
-            has_value:   Math.abs(diff) > 3,
+            has_value:   Math.abs(diff) > 5,
             note:        `Moteur projette ${Math.round(projectedTotal)} pts total vs ligne ${ouLine}`,
           });
         }
