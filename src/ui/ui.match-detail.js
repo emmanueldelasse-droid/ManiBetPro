@@ -80,6 +80,7 @@ function renderShell(match, analysis) {
       ${renderBloc4(analysis)}
       ${renderBloc5(analysis, match)}
       ${renderBloc6(analysis)}
+      ${renderBloc7(analysis, match)}
 
     </div>
   `;
@@ -473,6 +474,92 @@ function renderBloc6(analysis) {
     </div>
   `;
 }
+
+// ── BLOC 7 : RECOMMANDATIONS PARIS ────────────────────────────────────────
+
+function renderBloc7(analysis, match) {
+  const betting = analysis?.betting_recommendations;
+  const odds    = match?.odds;
+
+  if (!odds) {
+    return `
+      <div class="card match-detail__bloc" id="bloc-7">
+        <div class="bloc-header">
+          <span class="bloc-header__number mono text-muted">07</span>
+          <span class="bloc-header__title">Recommandations paris</span>
+        </div>
+        <div class="text-muted" style="font-size:13px;padding:var(--space-3) 0">
+          Cotes non disponibles pour ce match.
+        </div>
+      </div>`;
+  }
+
+  if (!betting?.recommendations?.length) {
+    return `
+      <div class="card match-detail__bloc" id="bloc-7">
+        <div class="bloc-header">
+          <span class="bloc-header__number mono text-muted">07</span>
+          <span class="bloc-header__title">Recommandations paris</span>
+        </div>
+        <div class="text-muted" style="font-size:13px;padding:var(--space-3) 0">
+          Aucun edge détecté sur les marchés disponibles pour ce match.
+        </div>
+      </div>`;
+  }
+
+  const CONF_COLORS = { FORTE: 'var(--color-success)', MOYENNE: 'var(--color-warning)', FAIBLE: 'var(--color-muted)' };
+  const SIDE_LABELS = {
+    HOME:  match?.home_team?.name ?? 'Domicile',
+    AWAY:  match?.away_team?.name ?? 'Extérieur',
+    OVER:  'Over',
+    UNDER: 'Under',
+  };
+
+  const best = betting.best;
+
+  const rows = betting.recommendations.map(r => {
+    const sideLabel = SIDE_LABELS[r.side] ?? r.side;
+    const oddsStr   = r.odds_line > 0 ? `+${r.odds_line}` : String(r.odds_line);
+    const confColor = CONF_COLORS[r.confidence] ?? 'var(--color-muted)';
+    const isBest    = best && r.type === best.type && r.side === best.side;
+
+    return `
+      <div class="betting-row${isBest ? ' betting-row--best' : ''}">
+        <div class="betting-row__type text-muted" style="font-size:11px">${r.label}</div>
+        <div class="betting-row__main">
+          <span class="betting-row__side">${sideLabel}</span>
+          <span class="mono betting-row__odds">${oddsStr}</span>
+        </div>
+        <div class="betting-row__stats">
+          <span class="text-muted" style="font-size:11px">Moteur ${r.motor_prob}% · Bookmaker ${r.implied_prob}%</span>
+          <span class="betting-row__edge" style="color:${confColor};font-size:11px;font-weight:600">
+            Edge +${r.edge}% · ${r.confidence}
+          </span>
+        </div>
+        ${r.note ? `<div class="text-muted" style="font-size:10px;margin-top:4px">${r.note}</div>` : ''}
+        ${isBest ? '<div style="font-size:10px;color:var(--color-success);margin-top:4px">★ Meilleure opportunité détectée</div>' : ''}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card match-detail__bloc" id="bloc-7">
+      <div class="bloc-header">
+        <span class="bloc-header__number mono text-muted">07</span>
+        <span class="bloc-header__title">Recommandations paris</span>
+        <span class="text-muted" style="font-size:11px">${betting.recommendations.length} marché${betting.recommendations.length > 1 ? 's' : ''} analysé${betting.recommendations.length > 1 ? 's' : ''}</span>
+      </div>
+
+      <div class="betting-disclaimer text-muted" style="font-size:11px;margin-bottom:var(--space-3);padding:var(--space-2);border-left:2px solid var(--color-border)">
+        Edge = écart entre la probabilité calculée par le moteur et la probabilité implicite des cotes.
+        Un edge positif ne garantit pas le résultat — il indique une opportunité statistique.
+      </div>
+
+      <div class="betting-list">
+        ${rows}
+      </div>
+    </div>`;
+}
+
 
 function renderContextFactor(label, value, level) {
   const cls = level === 'HIGH' ? 'text-success' : level === 'LOW' ? 'text-success' : level === 'MEDIUM' ? 'text-warning' : 'text-muted';
