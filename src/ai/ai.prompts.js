@@ -16,6 +16,8 @@ export const AI_PROMPTS = {
 
   SYSTEM_DETECT_INCONSISTENCY: `Auditeur analytique NBA. Détecte les incohérences : signal fort + faible robustesse, variable critique manquante, forme récente vs bilan saison. Si aucune → dis-le. Max 120 mots. ${RULES}`,
 
+  SYSTEM_BETTING: `Auditeur analytique NBA. Explique les recommandations de paris détectées par le moteur. Pour chaque paris : nomme le marché, explique l'edge calculé, rappelle les limites (edge ≠ certitude). Max 150 mots. ${RULES}`,
+
   SYSTEM_SCENARIO: `Auditeur analytique NBA. Explore le scénario en t'appuyant uniquement sur les données fournies. Conditionnel uniquement. Max 150 mots. ${RULES}`,
 
   buildUserMessage(task, context) {
