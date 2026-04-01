@@ -124,12 +124,21 @@ export class ProviderNBA {
     const cached   = ProviderCache.get(cacheKey);
     if (cached) return cached;
 
-    const url  = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`;
-    const data = await this._fetch(url, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
-    if (!data || !data.available) return null;
+    // Priorité 1 : ESPN injuries (temps réel, toujours disponible)
+    const espnUrl  = `${WORKER}/nba/injuries/espn`;
+    const espnData = await this._fetch(espnUrl, 'ESPN_INJURIES', '/nba/injuries/espn', API_CONFIG.TIMEOUTS.DEFAULT);
+    if (espnData?.available && espnData.players?.length > 0) {
+      ProviderCache.set(cacheKey, espnData, 'INJURIES');
+      return espnData;
+    }
 
-    ProviderCache.set(cacheKey, data, 'INJURIES');
-    return data;
+    // Fallback : PDF NBA officiel (~2h avant matchs)
+    const pdfUrl  = `${WORKER}${API_CONFIG.ROUTES.NBA.INJURIES}?date=${date}`;
+    const pdfData = await this._fetch(pdfUrl, 'NBA_PDF', '/nba/injuries', API_CONFIG.TIMEOUTS.INJURIES);
+    if (!pdfData || !pdfData.available) return null;
+
+    ProviderCache.set(cacheKey, pdfData, 'INJURIES');
+    return pdfData;
   }
 
   /**
