@@ -395,7 +395,11 @@ function renderBloc5(analysis, match) {
         const away = match?.away_team?.name ?? 'Extérieur';
         const side = best.side === 'HOME' ? home : best.side === 'AWAY' ? away : best.side;
         const oddsStr = best.odds_line > 0 ? `+${best.odds_line}` : String(best.odds_line);
-        const ouLabel = best.type === 'OVER_UNDER' ? (best.side === 'OVER' ? 'Over' : 'Under') + ' ' : ''; return `Pari suggéré : ${ouLabel}${best.type === 'OVER_UNDER' ? '' : side + ' '}${oddsStr} — cote sous-estimée de ${best.edge}%`;
+        if (best.type === 'OVER_UNDER') {
+          const ouLabel = best.side === 'OVER' ? 'Over' : 'Under';
+          return `Pari suggéré : ${ouLabel} ${oddsStr} — cote sous-estimée de ${best.edge}%`;
+        }
+        return `Pari suggéré : ${side} ${oddsStr} — cote sous-estimée de ${best.edge}%`;
       })()
     : null;
 
@@ -671,20 +675,6 @@ Variables à sensibilité critique : ${(analysis.robustness_breakdown?.critical_
 Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
   ? `${analysis.robustness_breakdown.reversal_threshold.variable} à ${analysis.robustness_breakdown.reversal_threshold.step_pct}%`
   : 'aucun détecté'}
-
-Paris suggérés par le moteur : ${(() => {
-  const recs = analysis.betting_recommendations?.recommendations ?? [];
-  if (!recs.length) return 'aucun';
-  const home = match?.home_team?.name ?? 'Domicile';
-  const away = match?.away_team?.name ?? 'Extérieur';
-  return recs.map(r => {
-    const side = r.side === 'HOME' ? home : r.side === 'AWAY' ? away : r.side;
-    const oddsStr = r.odds_line > 0 ? '+' + r.odds_line : String(r.odds_line);
-    return r.type === 'OVER_UNDER'
-      ? `${r.label} : ${r.side} ${oddsStr} (moteur ${r.motor_prob}pts vs ligne ${r.implied_prob}pts, edge ${r.edge}%)`
-      : `${r.label} : ${side} ${oddsStr} (moteur ${r.motor_prob}% vs bookmaker ${r.implied_prob}%, edge ${r.edge}%)`;
-  }).join(' | ');
-})()}
   `.trim();
 
   try {
