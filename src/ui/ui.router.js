@@ -75,7 +75,7 @@ class Router {
     // Route initiale — toujours dashboard au démarrage
     this.navigate('dashboard', { replace: true });
 
-    Logger.info('ROUTER_INIT', { initialRoute });
+    Logger.info('ROUTER_INIT', { initialRoute: 'dashboard' });
   }
 
   /**
