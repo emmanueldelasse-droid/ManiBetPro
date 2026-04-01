@@ -72,9 +72,8 @@ class Router {
       this._updateNavActive(route);
     });
 
-    // Route initiale
-    const initialRoute = this._getRouteFromHash() ?? 'dashboard';
-    this.navigate(initialRoute, { replace: true });
+    // Route initiale — toujours dashboard au démarrage
+    this.navigate('dashboard', { replace: true });
 
     Logger.info('ROUTER_INIT', { initialRoute });
   }
