@@ -24,76 +24,41 @@ function getCurrentNBASeason() {
   return month >= 10 ? String(year) : String(year - 1);
 }
 
-// ESPN Team ID → BallDontLie Team ID mapping
-// Nécessaire car les deux APIs utilisent des IDs différents
-const ESPN_TO_BDL_ID = {
-  '1':  '1',   // Atlanta Hawks
-  '2':  '2',   // Boston Celtics
-  '3':  '3',   // Brooklyn Nets
-  '4':  '5',   // Charlotte Hornets
-  '5':  '6',   // Chicago Bulls
-  '6':  '7',   // Cleveland Cavaliers
-  '7':  '8',   // Dallas Mavericks
-  '8':  '9',   // Denver Nuggets
-  '9':  '10',  // Detroit Pistons
-  '10': '11',  // Golden State Warriors
-  '11': '12',  // Houston Rockets
-  '12': '13',  // Indiana Pacers
-  '13': '14',  // LA Clippers
-  '14': '16',  // Los Angeles Lakers
-  '15': '17',  // Memphis Grizzlies
-  '16': '18',  // Miami Heat — ESPN ID=14, BDL ID=16
-  '17': '19',  // Milwaukee Bucks
-  '18': '20',  // Minnesota Timberwolves
-  '19': '21',  // New Orleans Pelicans
-  '20': '22',  // New York Knicks
-  '21': '23',  // Oklahoma City Thunder
-  '22': '24',  // Orlando Magic
-  '23': '25',  // Philadelphia 76ers
-  '24': '26',  // Phoenix Suns
-  '25': '27',  // Portland Trail Blazers
-  '26': '28',  // Sacramento Kings
-  '27': '29',  // San Antonio Spurs
-  '28': '30',  // Toronto Raptors
-  '29': '31',  // Utah Jazz
-  '30': '32',  // Washington Wizards
+// Mapping nom équipe ESPN → ID BallDontLie
+// BDL utilise les IDs officiels NBA (1-30) associés aux noms complets
+const TEAM_NAME_TO_BDL_ID = {
+  'Atlanta Hawks':           '1',
+  'Boston Celtics':          '2',
+  'Brooklyn Nets':           '3',
+  'Charlotte Hornets':       '4',
+  'Chicago Bulls':           '5',
+  'Cleveland Cavaliers':     '6',
+  'Dallas Mavericks':        '7',
+  'Denver Nuggets':          '8',
+  'Detroit Pistons':         '9',
+  'Golden State Warriors':   '10',
+  'Houston Rockets':         '11',
+  'Indiana Pacers':          '12',
+  'LA Clippers':             '13',
+  'Los Angeles Lakers':      '14',
+  'Memphis Grizzlies':       '15',
+  'Miami Heat':              '16',
+  'Milwaukee Bucks':         '17',
+  'Minnesota Timberwolves':  '18',
+  'New Orleans Pelicans':    '19',
+  'New York Knicks':         '20',
+  'Oklahoma City Thunder':   '21',
+  'Orlando Magic':           '22',
+  'Philadelphia 76ers':      '23',
+  'Phoenix Suns':            '24',
+  'Portland Trail Blazers':  '25',
+  'Sacramento Kings':        '26',
+  'San Antonio Spurs':       '27',
+  'Toronto Raptors':         '28',
+  'Utah Jazz':               '29',
+  'Washington Wizards':      '30',
 };
 
-// Mapping ESPN ID → BDL ID — correction pour le vrai mapping
-// ESPN utilise des IDs non standards, BDL utilise les IDs officiels
-const ESPN_ID_TO_BDL = {
-  // Format : ESPN_ID: BDL_ID
-  '1':  '1',   // ATL Hawks
-  '2':  '2',   // BOS Celtics
-  '3':  '17',  // BKN Nets (ESPN=3, BDL=17)
-  '4':  '4',   // CHA Hornets (ESPN=4, BDL=4 — à vérifier)
-  '5':  '5',   // CHI Bulls
-  '6':  '6',   // CLE Cavaliers
-  '7':  '7',   // DAL Mavericks
-  '8':  '8',   // DEN Nuggets (ESPN=8, BDL=8)
-  '9':  '9',   // DET Pistons
-  '10': '10',  // GSW Warriors
-  '11': '11',  // HOU Rockets
-  '12': '12',  // IND Pacers
-  '13': '13',  // LAC Clippers
-  '14': '14',  // LAL Lakers
-  '15': '15',  // MEM Grizzlies
-  '16': '16',  // MIA Heat
-  '17': '17',  // MIL Bucks — à vérifier
-  '18': '18',  // MIN Timberwolves
-  '19': '19',  // NOP Pelicans
-  '20': '20',  // NYK Knicks
-  '21': '21',  // OKC Thunder
-  '22': '22',  // ORL Magic
-  '23': '23',  // PHI 76ers
-  '24': '24',  // PHX Suns
-  '25': '25',  // POR Trail Blazers
-  '26': '26',  // SAC Kings
-  '24': '27',  // SAS Spurs (ESPN=24, BDL=27)
-  '28': '28',  // TOR Raptors
-  '26': '29',  // UTA Jazz (ESPN=26, BDL=29)
-  '27': '30',  // WAS Wizards
-};
 
 // ── RENDER ────────────────────────────────────────────────────────────────
 
@@ -280,8 +245,8 @@ async function analyzeMatchesBatch(list, matches, storeInstance, container, date
 function buildRawData(match, recentForms, injuryReport) {
   const homeESPNId = match.home_team?.espn_id;
   const awayESPNId = match.away_team?.espn_id;
-  const homeBDLId  = getBDLId(homeESPNId);
-  const awayBDLId  = getBDLId(awayESPNId);
+  const homeBDLId  = getBDLId(homeESPNId, match.home_team?.name);
+  const awayBDLId  = getBDLId(awayESPNId, match.away_team?.name);
   const homeTeamName = match.home_team?.name;
   const awayTeamName = match.away_team?.name;
 
@@ -318,10 +283,13 @@ function buildRawData(match, recentForms, injuryReport) {
  * Convertit ESPN Team ID → BallDontLie Team ID.
  * Mapping approximatif — à affiner si des erreurs apparaissent.
  */
-function getBDLId(espnId) {
-  if (!espnId) return null;
-  const id = String(espnId);
-  return ESPN_ID_TO_BDL[id] ?? id;
+function getBDLId(espnId, teamName) {
+  // Priorité : mapping par nom d'équipe (fiable)
+  if (teamName && TEAM_NAME_TO_BDL_ID[teamName]) {
+    return TEAM_NAME_TO_BDL_ID[teamName];
+  }
+  // Fallback : ESPN ID direct
+  return espnId ? String(espnId) : null;
 }
 
 // ── RENDU DES CARTES ─────────────────────────────────────────────────────
