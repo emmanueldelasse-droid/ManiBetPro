@@ -476,7 +476,10 @@ export class EngineNBA {
       const edgeAway = pAway - impliedAway;
 
       // Recommander si edge > 3%
-      if (Math.abs(edgeHome) > 0.05) {
+      // Bloquer outsiders extrêmes (cote > +400 = prob < 20%)
+      const isExtremeOutsider = (edgeHome > 0 && odds.home_ml > 400) ||
+                                 (edgeHome < 0 && odds.away_ml > 400);
+      if (Math.abs(edgeHome) > 0.05 && !isExtremeOutsider) {
         recs.push({
           type:        'MONEYLINE',
           label:       'Vainqueur du match',
