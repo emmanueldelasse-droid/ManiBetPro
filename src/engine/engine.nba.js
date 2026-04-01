@@ -548,9 +548,10 @@ export class EngineNBA {
     // Trier par edge décroissant
     recs.sort((a, b) => b.edge - a.edge);
 
+    const validRecs = recs.filter(r => r.has_value);
     return {
-      recommendations: recs,
-      best:            recs.find(r => r.has_value) ?? null,
+      recommendations: validRecs,
+      best:            validRecs[0] ?? null,
       computed_at:     new Date().toISOString(),
     };
   }
