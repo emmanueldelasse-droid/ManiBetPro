@@ -75,6 +75,12 @@ export class DataOrchestrator {
 
       const matches = espnData.matches;
 
+      // Vider les analyses précédentes si on change de date
+      const prevDate = store.get('dashboardFilters')?.selectedDate;
+      if (prevDate && prevDate !== date) {
+        store.set({ matches: {}, analyses: {} });
+      }
+
       // Stocker les matchs dans le store immédiatement
       matches.forEach(match => {
         store.upsert('matches', match.id, { ...match, sport: 'NBA' });
