@@ -1,9 +1,14 @@
 /**
- * MANI BET PRO — ui.dashboard.js
+ * MANI BET PRO — ui.dashboard.js v2
  *
- * Responsabilité unique : afficher le dashboard.
- * Ne touche pas aux données, ne calcule rien.
- * Délègue tout chargement à DataOrchestrator.
+ * CORRECTIONS v2 :
+ *   - Cartes affichent probabilité moteur en % (P_moteur vs P_marché)
+ *     au lieu des barres "Signal / Robustesse" non parlantes
+ *   - Filtre O(1) : index par match_id au lieu de Object.values().find() O(n)
+ *   - Badges alignés sur decision ('ANALYSER'|'EXPLORER'|'INSUFFISANT'|'REJETÉ')
+ *     au lieu de confidence_level ('INCONCLUSIVE')
+ *   - Bordure carte selon décision, pas uniquement selon edge
+ *   - spread_line transmis au modal paper betting (correctif paper.settler.js)
  */
 
 import { router }           from './ui.router.js';
@@ -11,74 +16,115 @@ import { DataOrchestrator } from '../orchestration/data.orchestrator.js';
 import { EngineCore }       from '../engine/engine.core.js';
 import { LoadingUI }        from './ui.loading.js';
 import { Logger }           from '../utils/utils.logger.js';
+import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
 
 // ── POINT D'ENTRÉE ────────────────────────────────────────────────────────
 
 export async function render(container, storeInstance) {
-  // Date sélectionnée — par défaut aujourd'hui
   let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
 
-  container.innerHTML = renderShell(selectedDate);
-  bindFilterEvents(container, storeInstance);
-  bindDateSelector(container, storeInstance, selectedDate, async (newDate) => {
+  container.innerHTML = _renderShell(selectedDate);
+  _bindFilterEvents(container, storeInstance);
+  _bindDateSelector(container, storeInstance, selectedDate, async (newDate) => {
     selectedDate = newDate;
     storeInstance.set({ 'dashboardFilters.selectedDate': newDate });
     await _loadAndDisplay(container, storeInstance, newDate);
   });
+
   await _loadAndDisplay(container, storeInstance, selectedDate);
   return { destroy() {} };
 }
 
 // ── CHARGEMENT ────────────────────────────────────────────────────────────
 
-async function _loadAndDisplay(container, storeInstance, date = null) {
+async function _loadAndDisplay(container, storeInstance, date) {
   const list = container.querySelector('#matches-list');
   date = date ?? _getTodayDate();
 
   try {
     LoadingUI.show();
 
-    // Délègue tout à l'orchestrateur
     const result = await DataOrchestrator.loadAndAnalyze(date, storeInstance);
 
     if (!result?.matches?.length) {
-      renderEmptyState(list);
-      updateSummary(container, 0, 0, 0);
+      _renderEmptyState(list);
+      _updateSummary(container, 0, 0, 0);
       return;
     }
 
-    // Rendu des cartes
-    renderMatchCards(list, result.matches, storeInstance);
+    // Index analyses par match_id — O(1) pour les filtres
+    const analysisIndex = _buildAnalysisIndex(result.analyses);
 
-    // Mise à jour des badges avec les analyses
-    let conclusive = 0, rejected = 0;
+    _renderMatchCards(list, result.matches, storeInstance);
+
+    let analyser = 0, explorer = 0, insuffisant = 0, rejete = 0;
+
     result.matches.forEach(match => {
-      const analysis = result.analyses[match.id];
+      const analysis = analysisIndex[match.id];
       if (!analysis) return;
-      updateMatchCard(list, match.id, analysis);
-      if (analysis.confidence_level === 'INCONCLUSIVE') rejected++;
-      else conclusive++;
+      _updateMatchCard(list, match.id, analysis, match);
+
+      switch (analysis.decision ?? _legacyDecision(analysis)) {
+        case 'ANALYSER':    analyser++;    break;
+        case 'EXPLORER':    explorer++;    break;
+        case 'INSUFFISANT': insuffisant++; break;
+        case 'REJETÉ':      rejete++;      break;
+      }
     });
 
-    updateSummary(container, result.matches.length, conclusive, rejected);
-    _renderBestOpportunity(container, result.matches, result.analyses);
+    const conclusive = analyser + explorer;
+    const rejected   = insuffisant + rejete;
+    _updateSummary(container, result.matches.length, conclusive, rejected);
+    _renderBestOpportunity(container, result.matches, analysisIndex);
 
   } catch (err) {
     Logger.error('DASHBOARD_RENDER_ERROR', { message: err.message });
-    renderError(list);
+    _renderError(list);
   } finally {
     LoadingUI.hide();
   }
 }
 
+// ── INDEX DES ANALYSES ────────────────────────────────────────────────────
+
+/**
+ * Construit un index { [match_id]: analysis } depuis l'objet analyses.
+ * Évite le Object.values().find() O(n) à chaque filtre.
+ */
+function _buildAnalysisIndex(analyses) {
+  if (!analyses) return {};
+  const index = {};
+  for (const analysis of Object.values(analyses)) {
+    if (analysis?.match_id) {
+      index[analysis.match_id] = analysis;
+    }
+  }
+  return index;
+}
+
+/**
+ * Compatibilité : calcule decision depuis confidence_level pour les
+ * analyses produites avant la v4 du moteur.
+ */
+function _legacyDecision(analysis) {
+  if (!analysis) return 'INSUFFISANT';
+  if (analysis.confidence_level === 'INCONCLUSIVE' || analysis.confidence_level === null) {
+    return 'INSUFFISANT';
+  }
+  const edge = analysis.betting_recommendations?.best?.edge ?? 0;
+  if (edge >= 7 && analysis.confidence_level === 'HIGH') return 'ANALYSER';
+  if (edge >= 5) return 'EXPLORER';
+  return 'INSUFFISANT';
+}
+
 // ── SHELL ─────────────────────────────────────────────────────────────────
 
-function renderShell(selectedDate) {
+function _renderShell(selectedDate) {
   const displayDate = new Date(selectedDate + 'T12:00:00').toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long',
   });
-  const today    = _getTodayDate();
-  const tomorrow = _offsetDate(today, 1);
+  const today     = _getTodayDate();
+  const tomorrow  = _offsetDate(today, 1);
   const yesterday = _offsetDate(today, -1);
 
   return `
@@ -91,36 +137,24 @@ function renderShell(selectedDate) {
       </div>
 
       <!-- Sélecteur de date -->
-      <div class="date-selector" id="date-selector" style="
-        display:flex; gap:8px; margin-bottom:var(--space-4); flex-wrap:wrap;
-      ">
-        <button class="chip ${selectedDate === yesterday ? 'chip--active' : ''}"
-          data-date="${yesterday}">Hier</button>
-        <button class="chip ${selectedDate === today ? 'chip--active' : ''}"
-          data-date="${today}">Aujourd'hui</button>
-        <button class="chip ${selectedDate === tomorrow ? 'chip--active' : ''}"
-          data-date="${tomorrow}">Demain</button>
+      <div class="date-selector filter-chips" id="date-selector">
+        <button class="chip ${selectedDate === yesterday ? 'chip--active' : ''}" data-date="${yesterday}">Hier</button>
+        <button class="chip ${selectedDate === today     ? 'chip--active' : ''}" data-date="${today}">Aujourd'hui</button>
+        <button class="chip ${selectedDate === tomorrow  ? 'chip--active' : ''}" data-date="${tomorrow}">Demain</button>
         <input type="date" id="date-picker" value="${selectedDate}"
-          style="
-            background:var(--color-card);
-            border:1px solid var(--color-border);
-            color:var(--color-text);
-            border-radius:20px;
-            padding:4px 12px;
-            font-size:12px;
-            cursor:pointer;
-          "
+          style="background:var(--color-card);border:1px solid var(--color-border);color:var(--color-text);border-radius:20px;padding:4px 12px;font-size:12px;cursor:pointer;"
         />
       </div>
 
+      <!-- Résumé -->
       <div class="dashboard__summary" id="day-summary">
         <div class="summary-card" id="summary-total">
           <div class="summary-card__value">—</div>
-          <div class="summary-card__label">Matchs chargés</div>
+          <div class="summary-card__label">Matchs</div>
         </div>
         <div class="summary-card summary-card--success" id="summary-conclusive">
           <div class="summary-card__value">—</div>
-          <div class="summary-card__label">Concluants</div>
+          <div class="summary-card__label">Analysables</div>
         </div>
         <div class="summary-card summary-card--muted" id="summary-rejected">
           <div class="summary-card__value">—</div>
@@ -128,6 +162,7 @@ function renderShell(selectedDate) {
         </div>
       </div>
 
+      <!-- Filtres -->
       <div class="dashboard__filters">
         <div class="filter-row">
           <span class="filter-label">Sport</span>
@@ -137,11 +172,12 @@ function renderShell(selectedDate) {
           </div>
         </div>
         <div class="filter-row">
-          <span class="filter-label">Statut</span>
-          <div class="filter-chips" id="filter-status">
-            <button class="chip chip--active" data-status="ALL">Tous</button>
-            <button class="chip" data-status="CONCLUSIVE">Concluants</button>
-            <button class="chip" data-status="INCONCLUSIVE">Inconclus</button>
+          <span class="filter-label">Décision</span>
+          <div class="filter-chips" id="filter-decision">
+            <button class="chip chip--active" data-decision="ALL">Tous</button>
+            <button class="chip" data-decision="ANALYSER">Analyser</button>
+            <button class="chip" data-decision="EXPLORER">Explorer</button>
+            <button class="chip" data-decision="INSUFFISANT">Insuffisant</button>
           </div>
         </div>
         <div class="filter-row">
@@ -155,9 +191,10 @@ function renderShell(selectedDate) {
         </div>
       </div>
 
-      <!-- Badge meilleure opportunité du jour -->
+      <!-- Meilleure opportunité -->
       <div id="best-opportunity" style="display:none"></div>
 
+      <!-- Liste matchs -->
       <div class="dashboard__matches" id="matches-list">
         <div class="loading-state">
           <div class="loader__spinner"></div>
@@ -171,9 +208,9 @@ function renderShell(selectedDate) {
 
 // ── CARTES MATCH ──────────────────────────────────────────────────────────
 
-function renderMatchCards(list, matches, storeInstance) {
+function _renderMatchCards(list, matches, storeInstance) {
   list.innerHTML = '';
-  if (!matches.length) { renderEmptyState(list); return; }
+  if (!matches.length) { _renderEmptyState(list); return; }
 
   const frag = document.createDocumentFragment();
   matches.forEach(match => frag.appendChild(_createMatchCard(match)));
@@ -189,23 +226,17 @@ function _createMatchCard(match) {
     ? new Date(match.datetime).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
     : '—';
 
-  const homeEfg    = match.home_season_stats?.efg_pct;
-  const awayEfg    = match.away_season_stats?.efg_pct;
-  const homeWin    = match.home_season_stats?.win_pct;
-  const awayWin    = match.away_season_stats?.win_pct;
   const homeRecord = match.home_team?.record ?? '—';
   const awayRecord = match.away_team?.record ?? '—';
   const odds       = match.odds;
-  const spread     = odds?.spread !== null && odds?.spread !== undefined
-    ? (odds.spread > 0 ? `+${odds.spread}` : String(odds.spread))
-    : '—';
-  const ou = odds?.over_under ?? '—';
+  const spread     = odds?.spread != null ? (odds.spread > 0 ? `+${odds.spread}` : String(odds.spread)) : '—';
+  const ou         = odds?.over_under ?? '—';
 
   card.innerHTML = `
     <div class="match-card__header">
       <span class="sport-tag sport-tag--nba">NBA</span>
       <span class="match-card__time text-muted">${time}</span>
-      <span class="match-card__status-badge badge badge--inconclusive" id="status-${match.id}">
+      <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}">
         Analyse…
       </span>
     </div>
@@ -224,32 +255,33 @@ function _createMatchCard(match) {
       </div>
     </div>
 
-    <div class="match-card__stats-inline text-muted" style="font-size:11px; display:flex; gap:12px; margin-bottom:8px;">
-      ${homeEfg !== null ? `<span>eFG% ${_toP(homeEfg)} / ${_toP(awayEfg)}</span>` : ''}
-      ${homeWin !== null ? `<span>Win% ${_toP(homeWin)} / ${_toP(awayWin)}</span>` : ''}
-      ${odds ? `<span class="mono">Spread ${spread} · O/U ${ou}</span>` : ''}
+    <!-- Probabilités — remplies par updateMatchCard après analyse -->
+    <div id="proba-${match.id}" class="match-card__proba" style="display:none">
+      <div class="match-card__proba-side" id="proba-home-${match.id}">
+        <span class="match-card__proba-motor" id="motor-home-${match.id}">—%</span>
+        <span class="match-card__proba-market text-muted" id="market-home-${match.id}"></span>
+        <span class="text-muted" style="font-size:10px">${match.home_team?.abbreviation ?? 'DOM'}</span>
+      </div>
+      <div class="match-card__proba-sep text-muted" style="font-size:11px">vs</div>
+      <div class="match-card__proba-side match-card__proba-side--away" id="proba-away-${match.id}">
+        <span class="match-card__proba-motor" id="motor-away-${match.id}">—%</span>
+        <span class="match-card__proba-market text-muted" id="market-away-${match.id}"></span>
+        <span class="text-muted" style="font-size:10px">${match.away_team?.abbreviation ?? 'EXT'}</span>
+      </div>
     </div>
 
-    <div class="match-card__scores" id="scores-${match.id}">
-      <div class="score-bar score-bar--signal">
-        <div class="score-bar__header">
-          <span class="score-bar__label">Signal</span>
-          <span class="score-bar__value text-muted mono">—</span>
-        </div>
-        <div class="score-bar__track">
-          <div class="score-bar__fill" style="width: 0%"></div>
-        </div>
-      </div>
-      <div class="score-bar score-bar--robust">
-        <div class="score-bar__header">
-          <span class="score-bar__label">Robustesse</span>
-          <span class="score-bar__value text-muted mono">—</span>
-        </div>
-        <div class="score-bar__track">
-          <div class="score-bar__fill" style="width: 0%"></div>
-        </div>
-      </div>
+    <!-- Edge -->
+    <div id="edge-${match.id}" style="display:none" class="match-card__edge">
+      <span class="text-muted" style="font-size:10px">EDGE</span>
+      <span class="match-card__edge-value" id="edge-val-${match.id}">—</span>
+      <span class="text-muted" style="font-size:10px">QUALITÉ</span>
+      <span class="mono" style="font-size:11px" id="quality-val-${match.id}">—</span>
     </div>
+
+    ${odds ? `
+    <div class="match-card__stats-inline text-muted" style="font-size:11px;display:flex;gap:12px">
+      <span class="mono">Spread ${spread} · O/U ${ou}</span>
+    </div>` : ''}
 
     <button class="btn btn--ghost match-card__cta" data-match-id="${match.id}">
       → Analyser
@@ -264,56 +296,108 @@ function _createMatchCard(match) {
   return card;
 }
 
-function updateMatchCard(list, matchId, analysis) {
-  const badge  = list.querySelector(`#status-${matchId}`);
-  const scores = list.querySelector(`#scores-${matchId}`);
-  if (!badge || !scores) return;
+function _updateMatchCard(list, matchId, analysis, match) {
+  const decision = analysis.decision ?? _legacyDecision(analysis);
 
-  const interp      = EngineCore.interpretConfidence(analysis.confidence_level);
-  badge.textContent = interp.label;
-  badge.className   = `match-card__status-badge badge ${interp.cssClass}`;
+  // Badge décision
+  const badge = list.querySelector(`#badge-${matchId}`);
+  if (badge) {
+    const cfg = _decisionConfig(decision);
+    badge.textContent = cfg.label;
+    badge.className   = `match-card__status-badge badge ${cfg.cssClass}`;
+  }
 
-  // Couleur de bordure de la carte selon le meilleur edge détecté
+  // Bordure carte selon décision
   const card = list.querySelector(`[data-match-id="${matchId}"]`);
-  if (card && analysis.betting_recommendations?.best) {
-    const edge = analysis.betting_recommendations.best.edge ?? 0;
-    if (edge >= 12)      card.style.borderLeft = '3px solid var(--color-success)';
-    else if (edge >= 8)  card.style.borderLeft = '3px solid var(--color-warning)';
-    else if (edge >= 5)  card.style.borderLeft = '3px solid var(--color-signal)';
+  if (card) {
+    const borderColors = {
+      ANALYSER:    'var(--color-success)',
+      EXPLORER:    'var(--color-warning)',
+      INSUFFISANT: 'transparent',
+      'REJETÉ':    'transparent',
+    };
+    const color = borderColors[decision];
+    if (color && color !== 'transparent') {
+      card.style.borderLeft = `3px solid ${color}`;
+    }
   }
 
-  const bars = scores.querySelectorAll('.score-bar');
+  // Probabilités moteur vs marché
+  const probaBlock = list.querySelector(`#proba-${matchId}`);
+  if (probaBlock && analysis.predictive_score !== null) {
+    const homeProb = Math.round(analysis.predictive_score * 100);
+    const awayProb = 100 - homeProb;
 
-  if (bars[0] && analysis.predictive_score !== null) {
-    const pct = Math.round(analysis.predictive_score * 100);
-    bars[0].querySelector('.score-bar__value').textContent = `${pct}%`;
-    bars[0].querySelector('.score-bar__fill').style.width  = `${pct}%`;
-    bars[0].querySelector('.score-bar__value').className   = 'score-bar__value mono text-signal';
+    const motorHome   = list.querySelector(`#motor-home-${matchId}`);
+    const motorAway   = list.querySelector(`#motor-away-${matchId}`);
+    const marketHome  = list.querySelector(`#market-home-${matchId}`);
+    const marketAway  = list.querySelector(`#market-away-${matchId}`);
+
+    if (motorHome) {
+      motorHome.textContent = `${homeProb}%`;
+      motorHome.className   = `match-card__proba-motor${homeProb > awayProb ? ' match-card__proba-motor--fav' : ''}`;
+    }
+    if (motorAway) {
+      motorAway.textContent = `${awayProb}%`;
+      motorAway.className   = `match-card__proba-motor${awayProb > homeProb ? ' match-card__proba-motor--fav' : ''}`;
+    }
+
+    // Probabilité marché (vig-free depuis Pinnacle si disponible)
+    const marketProbHome = analysis.betting_recommendations?.market_prob_home;
+    const marketProbAway = analysis.betting_recommendations?.market_prob_away;
+
+    if (marketHome && marketProbHome != null) {
+      marketHome.textContent = `Marché ${Math.round(marketProbHome * 100)}%`;
+    }
+    if (marketAway && marketProbAway != null) {
+      marketAway.textContent = `Marché ${Math.round(marketProbAway * 100)}%`;
+    }
+
+    probaBlock.style.display = '';
   }
 
-  if (bars[1] && analysis.robustness_score !== null) {
-    const pct = Math.round(analysis.robustness_score * 100);
-    const cls = pct >= 75 ? 'text-success' : pct >= 50 ? 'text-warning' : 'text-danger';
-    bars[1].querySelector('.score-bar__value').textContent = `${pct}%`;
-    bars[1].querySelector('.score-bar__fill').style.width  = `${pct}%`;
-    bars[1].querySelector('.score-bar__value').className   = `score-bar__value mono ${cls}`;
-    bars[1].querySelector('.score-bar__fill').style.background =
-      pct >= 75 ? 'var(--color-robust-high)'
-      : pct >= 50 ? 'var(--color-robust-mid)'
-      : 'var(--color-robust-low)';
+  // Edge + qualité données
+  const edgeBlock = list.querySelector(`#edge-${matchId}`);
+  const edgeVal   = list.querySelector(`#edge-val-${matchId}`);
+  const qualVal   = list.querySelector(`#quality-val-${matchId}`);
+  const best      = analysis.betting_recommendations?.best;
+
+  if (edgeBlock && best?.edge != null) {
+    edgeBlock.style.display = '';
+
+    if (edgeVal) {
+      edgeVal.textContent = `+${best.edge}%`;
+      edgeVal.style.color = best.edge >= 10
+        ? 'var(--color-success)'
+        : best.edge >= 7
+        ? 'var(--color-warning)'
+        : 'var(--color-text-secondary)';
+    }
+
+    if (qualVal && analysis.data_quality_score != null) {
+      const q = Math.round(analysis.data_quality_score * 100);
+      qualVal.textContent = `${q}%`;
+      qualVal.style.color = q >= 80
+        ? 'var(--color-success)'
+        : q >= 60
+        ? 'var(--color-warning)'
+        : 'var(--color-danger)';
+    }
   }
 
+  // Motif de rejet
   if (analysis.rejection_reason) {
     const el       = document.createElement('div');
     el.className   = 'match-card__rejection text-muted';
     el.textContent = `↳ ${_formatRejection(analysis.rejection_reason)}`;
-    scores.after(el);
+    const edgeEl   = list.querySelector(`#edge-${matchId}`);
+    if (edgeEl) edgeEl.after(el);
   }
 }
 
 // ── RÉSUMÉ ────────────────────────────────────────────────────────────────
 
-function updateSummary(container, total, conclusive, rejected) {
+function _updateSummary(container, total, conclusive, rejected) {
   const t = container.querySelector('#summary-total .summary-card__value');
   const c = container.querySelector('#summary-conclusive .summary-card__value');
   const r = container.querySelector('#summary-rejected .summary-card__value');
@@ -322,14 +406,75 @@ function updateSummary(container, total, conclusive, rejected) {
   if (r) r.textContent = rejected;
 }
 
+// ── MEILLEURE OPPORTUNITÉ ─────────────────────────────────────────────────
+
+function _renderBestOpportunity(container, matches, analysisIndex) {
+  const el = container.querySelector('#best-opportunity');
+  if (!el) return;
+
+  let bestMatch = null, bestAnalysis = null, bestEdge = 0;
+
+  matches.forEach(m => {
+    const a = analysisIndex[m.id];
+    if (!a?.betting_recommendations?.best) return;
+    const edge = a.betting_recommendations.best.edge ?? 0;
+    if (edge > bestEdge) { bestEdge = edge; bestMatch = m; bestAnalysis = a; }
+  });
+
+  if (!bestMatch || bestEdge < 5) { el.style.display = 'none'; return; }
+
+  const best       = bestAnalysis.betting_recommendations.best;
+  const SIDE_MAP   = {
+    HOME:  bestMatch.home_team?.name,
+    AWAY:  bestMatch.away_team?.name,
+    OVER:  'Over',
+    UNDER: 'Under',
+  };
+  const sideLabel  = SIDE_MAP[best.side] ?? best.side;
+  const oddsDecimal = americanToDecimal(best.odds_line) ?? '—';
+
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div style="
+      background:linear-gradient(135deg,rgba(34,197,94,0.10),rgba(34,197,94,0.03));
+      border:1px solid rgba(34,197,94,0.25);
+      border-radius:var(--radius-md);
+      padding:12px 14px;
+      margin-bottom:var(--space-4);
+      cursor:pointer;
+    " id="best-opp-card">
+      <div style="font-size:10px;color:var(--color-success);font-weight:700;margin-bottom:4px;letter-spacing:0.05em">
+        ★ MEILLEURE OPPORTUNITÉ DU JOUR
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:13px;font-weight:600">
+            ${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}
+          </div>
+          <div style="font-size:12px;color:var(--color-muted);margin-top:2px">
+            ${sideLabel} · ${oddsDecimal}
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:700;color:var(--color-success)">+${bestEdge}%</div>
+          <div style="font-size:10px;color:var(--color-muted)">edge</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  el.querySelector('#best-opp-card')?.addEventListener('click', () => {
+    router.navigate('match', { matchId: bestMatch.id });
+  });
+}
+
 // ── FILTRES ───────────────────────────────────────────────────────────────
 
-function bindDateSelector(container, storeInstance, initialDate, onDateChange) {
+function _bindDateSelector(container, storeInstance, initialDate, onDateChange) {
   const selector = container.querySelector('#date-selector');
   const picker   = container.querySelector('#date-picker');
   if (!selector) return;
 
-  // Chips de date
   selector.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip[data-date]');
     if (!chip) return;
@@ -340,112 +485,71 @@ function bindDateSelector(container, storeInstance, initialDate, onDateChange) {
     onDateChange(newDate);
   });
 
-  // Input date picker
   if (picker) {
     picker.addEventListener('change', (e) => {
-      const newDate = e.target.value;
       selector.querySelectorAll('.chip').forEach(c => c.classList.remove('chip--active'));
-      onDateChange(newDate);
+      onDateChange(e.target.value);
     });
   }
 }
 
-function bindFilterEvents(container, storeInstance) {
+function _bindFilterEvents(container, storeInstance) {
+  // Délégation unique sur le container — O(1) par clic
   container.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
     const parent = chip.closest('.filter-chips');
-    if (!parent) return;
+    if (!parent || parent.id === 'date-selector') return;
+
     parent.querySelectorAll('.chip').forEach(c => c.classList.remove('chip--active'));
     chip.classList.add('chip--active');
-    const sport  = chip.dataset.sport;
-    const status = chip.dataset.status;
-    const edge   = chip.dataset.edge;
-    if (sport)              _applyFilter(container, storeInstance, 'sport', sport);
-    if (status)             _applyFilter(container, storeInstance, 'status', status);
-    if (edge !== undefined) _applyFilter(container, storeInstance, 'edge', edge);
+
+    // Récupérer l'index courant depuis le store
+    const analyses = storeInstance.get('analyses') ?? {};
+    const analysisIndex = _buildAnalysisIndex(analyses);
+
+    if (chip.dataset.sport !== undefined)    _applyFilter(container, storeInstance, 'sport',    chip.dataset.sport,    analysisIndex);
+    if (chip.dataset.decision !== undefined) _applyFilter(container, storeInstance, 'decision', chip.dataset.decision, analysisIndex);
+    if (chip.dataset.edge !== undefined)     _applyFilter(container, storeInstance, 'edge',     chip.dataset.edge,     analysisIndex);
   });
 }
 
-function _renderBestOpportunity(container, matches, analyses) {
-  const el = container.querySelector('#best-opportunity');
-  if (!el) return;
+/**
+ * Applique un filtre en O(n) sur les cartes visibles.
+ * L'index analysisIndex évite le O(n²) de l'ancienne version.
+ */
+function _applyFilter(container, storeInstance, filterType, value, analysisIndex) {
+  const matches = storeInstance.get('matches') ?? {};
 
-  // Trouver le match avec le meilleur edge
-  let bestMatch = null, bestAnalysis = null, bestEdge = 0;
-  matches.forEach(m => {
-    const a = analyses[m.id];
-    if (!a?.betting_recommendations?.best) return;
-    const edge = a.betting_recommendations.best.edge ?? 0;
-    if (edge > bestEdge) { bestEdge = edge; bestMatch = m; bestAnalysis = a; }
-  });
-
-  if (!bestMatch || bestEdge < 5) { el.style.display = 'none'; return; }
-
-  const best      = bestAnalysis.betting_recommendations.best;
-  const SIDE_MAP  = { HOME: bestMatch.home_team?.name, AWAY: bestMatch.away_team?.name, OVER: 'Over', UNDER: 'Under' };
-  const sideLabel = SIDE_MAP[best.side] ?? best.side;
-  const oddsDecimal = best.odds_line > 0
-    ? Math.round((best.odds_line / 100 + 1) * 100) / 100
-    : Math.round((100 / Math.abs(best.odds_line) + 1) * 100) / 100;
-
-  el.style.display = 'block';
-  el.innerHTML = `
-    <div style="
-      background:linear-gradient(135deg,rgba(72,199,142,0.12),rgba(72,199,142,0.04));
-      border:1px solid rgba(72,199,142,0.3);
-      border-radius:10px;
-      padding:12px 14px;
-      margin-bottom:var(--space-4);
-      cursor:pointer;
-    " id="best-opp-card">
-      <div style="font-size:10px;color:var(--color-success);font-weight:700;margin-bottom:4px">
-        ★ MEILLEURE OPPORTUNITÉ DU JOUR
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-size:13px;font-weight:600">${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}</div>
-          <div style="font-size:12px;color:var(--color-muted);margin-top:2px">${sideLabel} · ${oddsDecimal}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:18px;font-weight:700;color:var(--color-success)">+${bestEdge}%</div>
-          <div style="font-size:10px;color:var(--color-muted)">edge</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  el.querySelector('#best-opp-card')?.addEventListener('click', () => {
-    import('./ui.router.js').then(m => m.router.navigate('match', { matchId: bestMatch.id }));
-  });
-}
-
-function _applyFilter(container, storeInstance, filterType, value) {
   container.querySelectorAll('.match-card').forEach(card => {
     const matchId  = card.dataset.matchId;
-    const match    = storeInstance.get('matches')?.[matchId];
-    const analyses = storeInstance.get('analyses') ?? {};
-    const analysis = Object.values(analyses).find(a => a.match_id === matchId);
+    const match    = matches[matchId];
+    const analysis = analysisIndex[matchId];
 
     let visible = true;
-    if (filterType === 'sport' && value !== 'ALL')  visible = match?.sport === value;
-    if (filterType === 'status' && value !== 'ALL') {
-      if (!analysis)                     visible = false;
-      else if (value === 'CONCLUSIVE')   visible = analysis.confidence_level !== 'INCONCLUSIVE';
-      else if (value === 'INCONCLUSIVE') visible = analysis.confidence_level === 'INCONCLUSIVE';
+
+    if (filterType === 'sport' && value !== 'ALL') {
+      visible = match?.sport === value;
     }
+
+    if (filterType === 'decision' && value !== 'ALL') {
+      const dec = analysis?.decision ?? _legacyDecision(analysis);
+      visible = dec === value;
+    }
+
     if (filterType === 'edge' && value !== '0') {
       const minEdge = parseInt(value);
       const bestEdge = analysis?.betting_recommendations?.best?.edge ?? 0;
-      if (bestEdge < minEdge) visible = false;
+      visible = bestEdge >= minEdge;
     }
+
     card.style.display = visible ? '' : 'none';
   });
 }
 
 // ── ÉTATS VIDES ───────────────────────────────────────────────────────────
 
-function renderEmptyState(container) {
+function _renderEmptyState(container) {
   container.innerHTML = `
     <div class="empty-state">
       <div class="empty-state__icon">◎</div>
@@ -457,7 +561,7 @@ function renderEmptyState(container) {
   `;
 }
 
-function renderError(container) {
+function _renderError(container) {
   container.innerHTML = `
     <div class="empty-state">
       <div class="empty-state__icon">⚠</div>
@@ -469,21 +573,16 @@ function renderError(container) {
   `;
 }
 
-// ── HELPERS PRIVÉS ────────────────────────────────────────────────────────
+// ── HELPERS ───────────────────────────────────────────────────────────────
 
-function _getTodayDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function _offsetDate(dateStr, days) {
-  const d = new Date(dateStr + 'T12:00:00');
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function _toP(v) {
-  if (v === null || v === undefined) return '—';
-  return (v * 100).toFixed(1) + '%';
+function _decisionConfig(decision) {
+  const map = {
+    'ANALYSER':    { label: 'Analyser',    cssClass: 'badge--analyser' },
+    'EXPLORER':    { label: 'Explorer',    cssClass: 'badge--explorer' },
+    'INSUFFISANT': { label: 'Insuffisant', cssClass: 'badge--insuffisant' },
+    'REJETÉ':      { label: 'Rejeté',      cssClass: 'badge--rejete' },
+  };
+  return map[decision] ?? { label: 'Inconclus', cssClass: 'badge--inconclusive' };
 }
 
 function _formatRejection(reason) {
@@ -497,4 +596,14 @@ function _formatRejection(reason) {
     ABSENCES_NOT_CONFIRMED:          'Absences non confirmées',
   };
   return labels[reason] ?? reason;
+}
+
+function _getTodayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function _offsetDate(dateStr, days) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
