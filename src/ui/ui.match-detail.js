@@ -492,7 +492,7 @@ function renderBloc5(analysis, match) {
         const home = match?.home_team?.name ?? 'Domicile';
         const away = match?.away_team?.name ?? 'Extérieur';
         const side = best.side === 'HOME' ? home : best.side === 'AWAY' ? away : best.side;
-        const oddsStr = best.odds_line > 0 ? `+${best.odds_line}` : String(best.odds_line);
+        const oddsStr = _americanToDecimal(best.odds_line) ?? best.odds_line;
         if (best.type === 'OVER_UNDER') {
           const ouLabel = best.side === 'OVER' ? 'Over' : 'Under';
           return `Pari suggéré : ${ouLabel} ${oddsStr} — cote sous-estimée de ${best.edge}%`;
@@ -811,11 +811,11 @@ function renderBloc7(analysis, match) {
         whyText = `${sideLabel} est favori et sa cote le reflète bien. Le moteur détecte que le marché sous-estime légèrement ses chances réelles (${motorFavProb}% vs ${r.implied_prob}% selon le bookmaker).`;
       }
     } else if (r.type === 'SPREAD') {
-      const sline = r.spread_line ?? r.implied_prob;
-      whyText = `Le moteur estime un écart de ${r.motor_prob} pts. Le spread de ${Math.abs(sline)} pts offert par le bookmaker est plus généreux — c'est là que se trouve la valeur.`;
+      const spreadDecimal = r.odds_decimal ?? oddsDecimal;
+      whyText = `Le moteur estime ${motorFavProb}% de chances pour ${sideLabel} de couvrir le spread de ${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts. La cote de ${spreadDecimal} chez ${r.odds_source ?? 'le bookmaker'} sous-estime cette probabilité.`;
     } else if (r.type === 'OVER_UNDER') {
-      const oline = r.ou_line ?? r.implied_prob;
-      whyText = `Le moteur projette ${r.motor_prob} pts au total. La ligne à ${oline} pts du bookmaker est ${r.side === 'OVER' ? 'trop basse' : 'trop haute'} par rapport à cette projection.`;
+      const ouDecimal = r.odds_decimal ?? oddsDecimal;
+      whyText = `Le moteur projette ${r.motor_prob} pts au total. La ligne est à ${r.ou_line} pts — le ${r.side === 'OVER' ? 'dépassement' : 'sous-total'} semble probable à la cote ${ouDecimal} chez ${r.odds_source ?? 'le bookmaker'}.`;
     }
 
     return `
@@ -840,9 +840,9 @@ function renderBloc7(analysis, match) {
           <div>
             <span style="font-size:18px;font-weight:700;color:var(--color-signal)">
               ${r.type === 'SPREAD'
-                ? `${r.spread_line > 0 ? '+' : ''}${r.spread_line} pts`
+                ? `${r.spread_line > 0 ? '+' : ''}${r.spread_line} · ${r.odds_decimal ?? oddsDecimal ?? '—'}`
                 : r.type === 'OVER_UNDER'
-                ? `${r.side === 'OVER' ? 'Over' : 'Under'} ${r.ou_line} pts`
+                ? `${r.side === 'OVER' ? 'Over' : 'Under'} ${r.ou_line} · ${r.odds_decimal ?? oddsDecimal ?? '—'}`
                 : oddsDecimal ?? '—'}
             </span>
             ${r.odds_source ? `<span style="font-size:10px;color:var(--color-muted);margin-left:6px">${r.odds_source}</span>` : ''}
