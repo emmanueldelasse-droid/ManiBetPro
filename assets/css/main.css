@@ -1547,171 +1547,57 @@ body {
   padding: 2px 0;
 }
 
-/* ── BLOC 7 : RECOMMANDATIONS PARIS ─────────────────────────────────────── */
+/* ── LOADING OVERLAY ─────────────────────────────────────────────────── */
 
-.betting-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.betting-row {
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.betting-row--best {
-  border-color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 6%, var(--color-surface));
-}
-
-.betting-row__type {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 4px;
-}
-
-.betting-row__main {
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-bg);
+  z-index: 9999;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: 4px;
+  justify-content: center;
 }
 
-.betting-row__side {
-  font-size: 15px;
-  font-weight: 600;
+.loading-overlay.hidden {
+  display: none;
+}
+
+.loading-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  width: min(320px, 80vw);
+}
+
+.loading-overlay__logo {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   color: var(--color-text);
+  opacity: 0.6;
 }
 
-.betting-row__odds {
-  font-size: 14px;
-  color: var(--color-success);
-  font-weight: 600;
+.loading-overlay__bar {
+  width: 100%;
+  height: 3px;
+  background: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
 }
 
-.betting-row__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
+.loading-overlay__bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--color-signal);
+  border-radius: 2px;
+  transition: width 400ms ease;
 }
 
-.betting-row__edge {
-  font-weight: 600;
-}
-
-.betting-disclaimer {
-  font-size: 11px;
-  color: var(--color-muted);
-  padding: var(--space-2) var(--space-3);
-  border-left: 2px solid var(--color-border);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  margin-bottom: var(--space-3);
-}
-
-/* ── HISTORIQUE ──────────────────────────────────────────────────────────── */
-
-.view-history {
-  padding: var(--space-4) var(--space-3);
-  max-width: 900px;
-  margin: 0 auto;
-}
-
-.history-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: var(--space-3);
-}
-
-.history-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.history-header {
-  display: grid;
-  grid-template-columns: 90px 1fr 60px 80px 90px 90px;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-muted);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.history-row {
-  display: grid;
-  grid-template-columns: 90px 1fr 60px 80px 90px 90px;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-3);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+.loading-overlay__message {
   font-size: 12px;
-}
-
-.history-row__date {
   color: var(--color-muted);
-  font-size: 11px;
-}
-
-.history-row__match {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.history-row__home {
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.history-row__vs {
-  color: var(--color-muted);
-  font-size: 10px;
-}
-
-.history-row__away {
-  color: var(--color-text-secondary);
-}
-
-.history-row__sport {
-  color: var(--color-muted);
-  font-size: 11px;
-}
-
-.history-row__signal,
-.history-row__rob {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.history-empty {
   text-align: center;
-  color: var(--color-muted);
-  font-size: 13px;
-  padding: var(--space-6) var(--space-3);
-  line-height: 1.8;
-}
-
-@media (max-width: 600px) {
-  .history-header,
-  .history-row {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto;
-  }
-
-  .history-row__sport,
-  .history-row__rob {
-    display: none;
-  }
+  min-height: 18px;
 }
