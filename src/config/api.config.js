@@ -16,11 +16,13 @@ export const API_CONFIG = {
 
   ROUTES: {
     NBA: {
-      MATCHES:         '/nba/matches',           // ?date=YYYYMMDD
-      TEAM_STATS:      '/nba/team/:id/stats',    // ESPN — stats saison
-      TEAM_RECENT:     '/nba/team/:id/recent',   // BDL  — forme récente W/L
-      INJURIES:        '/nba/injuries',           // ?date=YYYY-MM-DD — PDF NBA officiel
-      STANDINGS:       '/nba/standings',
+      MATCHES:          '/nba/matches',           // ?date=YYYYMMDD
+      TEAM_STATS:       '/nba/team/:id/stats',    // ESPN — stats saison
+      TEAM_RECENT:      '/nba/team/:id/recent',   // BDL  — forme récente W/L
+      INJURIES:         '/nba/injuries',           // ?date=YYYY-MM-DD — PDF NBA officiel
+      STANDINGS:        '/nba/standings',
+      ODDS_COMPARISON:  '/nba/odds/comparison',   // The Odds API — multi-books
+      RESULTS:          '/nba/results',            // scores finaux — paper trading
     },
   },
 
@@ -34,10 +36,12 @@ export const API_CONFIG = {
   CACHE_TTL: {
     MATCHES:        1800,   // 30 min
     SEASON_STATS:  21600,   // 6h
-    RECENT_FORM:    1800,   // 30 min
+    RECENT_FORM:    7200,   // 2h
     INJURIES:       1800,   // 30 min
     STANDINGS:     86400,   // 24h
-    AI_EXPLANATION: 86400,  // 24h — réponse IA mise en cache
+    AI_EXPLANATION:  86400,  // 24h — réponse IA mise en cache
+    ODDS_COMPARISON:  7200,  // 2h — adaptatif côté Worker
+    RESULTS:         86400,  // 24h — scores finaux immuables
   },
 
   // Seuils de quota (ratio utilisé/limite)
