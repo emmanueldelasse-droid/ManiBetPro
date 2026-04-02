@@ -1,9 +1,20 @@
 /**
- * MANI BET PRO — utils.logger.js
+ * MANI BET PRO — utils.logger.js v2
  *
  * Logger centralisé.
  * Niveaux : DEBUG | INFO | WARN | ERROR
- * Persiste les logs API dans le store pour affichage UI.
+ *
+ * CORRECTIONS v2 :
+ *   - _log() : entry construit et persisté pour WARN + ERROR
+ *     (en v1, entry était construit mais jamais utilisé — code mort)
+ *   - engineResult() : paramètre renommé decision (était confidenceLevel),
+ *     les valeurs WARN correspondent à 'INSUFFISANT' et 'REJETÉ'
+ *     (en v1, comparait à 'INCONCLUSIVE' — valeur du modèle v1 abandonné)
+ *   - aiCall() : persiste dans store.push('aiLogs') pour l'UI Audit
+ *     (en v1, uniquement logué en console)
+ *   - MIN_LEVEL protégé contre les valeurs inconnues
+ *   - Alias renommés : logError/logWarn/logInfo pour éviter collision
+ *     avec le built-in Error dans les modules importateurs
  */
 
 import { store } from '../state/store.js';
@@ -15,8 +26,10 @@ const LOG_LEVELS = {
   ERROR: 3,
 };
 
-// Niveau minimum affiché en console (DEBUG en dev, INFO en prod)
-const MIN_LEVEL = window.location.hostname === 'localhost' ? 'DEBUG' : 'INFO';
+const MIN_LEVEL_KEY = window.location.hostname === 'localhost' ? 'DEBUG' : 'INFO';
+
+// CORRECTION : protégé contre les valeurs inconnues
+const MIN_LEVEL_NUM = LOG_LEVELS[MIN_LEVEL_KEY] ?? LOG_LEVELS['INFO'];
 
 const STYLES = {
   DEBUG: 'color: #6b7280; font-size: 11px;',
@@ -27,32 +40,18 @@ const STYLES = {
 
 export class Logger {
 
-  /**
-   * Log de niveau INFO — événements normaux de l'application.
-   * @param {string} event — identifiant de l'événement (ex: 'APP_INIT')
-   * @param {object} [data] — données associées (sans données sensibles)
-   */
   static info(event, data = {}) {
     this._log('INFO', event, data);
   }
 
-  /**
-   * Log de niveau DEBUG — détail de calcul ou de requête.
-   */
   static debug(event, data = {}) {
     this._log('DEBUG', event, data);
   }
 
-  /**
-   * Log de niveau WARN — situation dégradée non bloquante.
-   */
   static warn(event, data = {}) {
     this._log('WARN', event, data);
   }
 
-  /**
-   * Log de niveau ERROR — erreur bloquante ou inattendue.
-   */
   static error(event, errorOrData = {}) {
     const data = errorOrData instanceof Error
       ? { message: errorOrData.message, stack: errorOrData.stack }
@@ -62,17 +61,9 @@ export class Logger {
 
   /**
    * Log spécifique aux appels API.
-   * Persiste dans le store pour affichage dans l'UI (onglet Config / Audit).
-   *
-   * @param {object} params
-   * @param {string} params.provider
-   * @param {string} params.endpoint
-   * @param {number} params.statusCode
-   * @param {boolean} params.cached
-   * @param {number|null} params.ttlRemaining
-   * @param {string|null} params.error
+   * Persiste dans store.push('apiLogs') — visible dans l'UI Audit.
    */
-  static apiCall({ provider, endpoint, statusCode, cached, ttlRemaining = null, error = null }) {
+  static apiCall({ provider, endpoint, statusCode, cached, ttlRemaining = null, durationMs = null, error = null }) {
     const logEntry = {
       log_id:        crypto.randomUUID(),
       provider,
@@ -81,6 +72,7 @@ export class Logger {
       status_code:   statusCode,
       cached,
       ttl_remaining: ttlRemaining,
+      duration_ms:   durationMs,   // CORRECTION : champ ajouté (manquait en v1)
       error,
     };
 
@@ -91,29 +83,55 @@ export class Logger {
     this._log(level, 'API_CALL', {
       provider,
       endpoint,
-      status: statusCode,
+      status:  statusCode,
       cached,
-      error: error ?? undefined,
+      error:   error ?? undefined,
     });
   }
 
   /**
    * Log d'une analyse calculée par le moteur.
+   *
+   * CORRECTION :
+   *   - Paramètre renommé 'decision' (était 'confidenceLevel' — modèle v1)
+   *   - Valeurs WARN : 'INSUFFISANT' et 'REJETÉ' (étaient 'INCONCLUSIVE')
+   *   - API maintenue compatible : accepte aussi l'ancien 'confidenceLevel'
+   *     pour les appelants non encore migrés
    */
-  static engineResult({ sport, analysisId, confidenceLevel, rejectionReason }) {
-    const level = confidenceLevel === 'INCONCLUSIVE' ? 'WARN' : 'INFO';
+  static engineResult({ sport, analysisId, decision, confidenceLevel, rejectionReason }) {
+    // Compatibilité : accepter l'ancien paramètre confidenceLevel
+    const dec = decision ?? confidenceLevel;
+    const WARN_DECISIONS = ['INSUFFISANT', 'REJETÉ', 'INCONCLUSIVE'];
+    const level = WARN_DECISIONS.includes(dec) ? 'WARN' : 'INFO';
+
     this._log(level, 'ENGINE_RESULT', {
       sport,
       analysis_id:      analysisId,
-      confidence_level: confidenceLevel,
+      decision:         dec,
       rejection_reason: rejectionReason ?? null,
     });
   }
 
   /**
    * Log d'un appel IA.
+   *
+   * CORRECTION : persiste dans store.push('aiLogs') pour l'UI Audit.
+   * En v1, uniquement logué en console — inaccessible dans l'interface.
    */
   static aiCall({ analysisId, task, tokensUsed, flags = [] }) {
+    const logEntry = {
+      log_id:       crypto.randomUUID(),
+      analysis_id:  analysisId,
+      task,
+      tokens_used:  tokensUsed,
+      flags,
+      has_flags:    flags.length > 0,
+      logged_at:    new Date().toISOString(),
+    };
+
+    // Limité à 50 entrées — les appels IA sont rares et coûteux
+    store.push('aiLogs', logEntry, 50);
+
     this._log('INFO', 'AI_CALL', {
       analysis_id:  analysisId,
       task,
@@ -126,9 +144,11 @@ export class Logger {
   // ── PRIVÉ ──────────────────────────────────────────────────────────────
 
   static _log(level, event, data = {}) {
-    if (LOG_LEVELS[level] < LOG_LEVELS[MIN_LEVEL]) return;
+    if ((LOG_LEVELS[level] ?? 0) < MIN_LEVEL_NUM) return;
 
+    // CORRECTION : entry construit et utilisé (en v1 : construit mais ignoré)
     const entry = {
+      log_id:    crypto.randomUUID(),
       level,
       event,
       data,
@@ -139,21 +159,25 @@ export class Logger {
 
     if (level === 'ERROR') {
       console.error(`%c${prefix}`, STYLES[level], data);
+      // Persiste les erreurs dans le store
+      store.addError({ message: `${event}: ${data.message ?? JSON.stringify(data)}` });
     } else if (level === 'WARN') {
       console.warn(`%c${prefix}`, STYLES[level], data);
+      // Persiste aussi les WARN dans appLogs pour l'UI Audit
+      store.push('appLogs', entry, 200);
     } else {
       console.log(`%c${prefix}`, STYLES[level], data);
     }
-
-    // Stocker les erreurs dans le store
-    if (level === 'ERROR') {
-      store.addError({ message: `${event}: ${data.message ?? JSON.stringify(data)}` });
-    }
   }
-
 }
 
-// Alias pour usage direct sans classe
-export const log   = (event, data) => Logger.info(event, data);
-export const warn  = (event, data) => Logger.warn(event, data);
-export const error = (event, data) => Logger.error(event, data);
+// ── ALIASES ───────────────────────────────────────────────────────────────
+// CORRECTION : renommés pour éviter la collision avec le built-in Error
+// dans les modules qui font `import { logError } from '...'`
+export const logInfo  = (event, data) => Logger.info(event, data);
+export const logWarn  = (event, data) => Logger.warn(event, data);
+export const logError = (event, data) => Logger.error(event, data);
+
+// Alias courts maintenus pour compatibilité (sans collision avec Error)
+export const log  = logInfo;
+export const warn = logWarn;
