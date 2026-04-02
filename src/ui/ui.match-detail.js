@@ -14,7 +14,8 @@
  */
 
 import { router }     from './ui.router.js';
-import { EngineCore } from '../engine/engine.core.js';
+import { EngineCore }   from '../engine/engine.core.js';
+import { PaperEngine } from '../paper/paper.engine.js';
 import { Logger }     from '../utils/utils.logger.js';
 
 const WORKER_URL = 'https://manibetpro.emmanueldelasse.workers.dev';
@@ -605,6 +606,18 @@ function renderBloc7(analysis, match) {
         </div>
         ${r.note ? `<div class="text-muted" style="font-size:10px;margin-top:4px">${r.note}</div>` : ''}
         ${isBest ? '<div style="font-size:10px;color:var(--color-success);margin-top:4px">★ Meilleur pari du match</div>' : ''}
+        <button class="btn btn--primary btn--sm paper-bet-btn" style="margin-top:8px;width:100%"
+          data-market="${r.type}"
+          data-side="${r.side}"
+          data-side-label="${sideLabel}"
+          data-odds="${r.odds_line}"
+          data-edge="${r.edge}"
+          data-motor-prob="${r.motor_prob}"
+          data-implied-prob="${r.implied_prob}"
+          data-kelly="${r.kelly_stake ?? 0}"
+        >
+          📋 Enregistrer ce pari
+        </button>
       </div>`;
   }).join('');
 
@@ -828,6 +841,132 @@ Seuil de renversement : ${analysis.robustness_breakdown?.reversal_threshold
 }
 
 // ── ÉTAT VIDE ─────────────────────────────────────────────────────────────
+
+// ── MODAL PAPER TRADING ──────────────────────────────────────────────────
+
+function _openBetModal(btn, match, analysis, storeInstance) {
+  const market     = btn.dataset.market;
+  const side       = btn.dataset.side;
+  const sideLabel  = btn.dataset.sideLabel;
+  const odds       = Number(btn.dataset.odds);
+  const edge       = Number(btn.dataset.edge);
+  const motorProb  = Number(btn.dataset.motorProb);
+  const impliedProb = Number(btn.dataset.impliedProb);
+  const kelly      = Number(btn.dataset.kelly);
+
+  const state         = PaperEngine.load();
+  const bankroll      = state.current_bankroll;
+  const kellySuggested = kelly > 0
+    ? Math.round(kelly * bankroll * 100) / 100
+    : null;
+
+  const oddsStr = odds > 0 ? `+${odds}` : String(odds);
+  const marketLabels = { MONEYLINE: 'Vainqueur', SPREAD: 'Handicap', OVER_UNDER: 'Total pts' };
+
+  const modal = document.createElement('div');
+  modal.className = 'paper-modal-overlay';
+  modal.innerHTML = `
+    <div class="paper-modal">
+      <div class="paper-modal__header">
+        <span style="font-weight:600">📋 Enregistrer un pari</span>
+        <button class="paper-modal__close" id="modal-close">✕</button>
+      </div>
+
+      <div class="paper-modal__info">
+        <div class="paper-modal__match">${match.home_team?.name ?? '—'} vs ${match.away_team?.name ?? '—'}</div>
+        <div style="font-size:12px;color:var(--color-muted);margin-top:2px">
+          ${marketLabels[market] ?? market} · <strong>${sideLabel}</strong> · ${oddsStr}
+        </div>
+        <div style="font-size:11px;color:var(--color-muted);margin-top:4px">
+          Edge : ${edge}% · Moteur : ${motorProb}% · Bookmaker : ${impliedProb}%
+        </div>
+      </div>
+
+      <div class="paper-modal__field">
+        <label style="font-size:11px;color:var(--color-muted)">Bankroll actuelle</label>
+        <div style="font-size:16px;font-weight:600">${bankroll.toFixed(2)} €</div>
+      </div>
+
+      <div class="paper-modal__field">
+        <label style="font-size:11px;color:var(--color-muted)">
+          Mise (€)
+          ${kellySuggested ? `<span style="color:var(--color-signal)"> · Kelly suggère ${kellySuggested.toFixed(2)} €</span>` : ''}
+        </label>
+        <input type="number" id="stake-input" class="paper-modal__input"
+          value="${kellySuggested ?? ''}"
+          placeholder="Montant en €"
+          min="0.5" max="${bankroll.toFixed(2)}" step="0.5"
+        />
+      </div>
+
+      <div class="paper-modal__field">
+        <label style="font-size:11px;color:var(--color-muted)">Note (optionnel)</label>
+        <input type="text" id="note-input" class="paper-modal__input"
+          placeholder="Pourquoi ce pari ?"
+          maxlength="200"
+        />
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:var(--space-4)">
+        <button class="btn btn--ghost" id="modal-cancel" style="flex:1">Annuler</button>
+        <button class="btn btn--primary" id="modal-confirm" style="flex:2">✓ Confirmer le pari</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  modal.querySelector('#modal-close')?.addEventListener('click', () => modal.remove());
+  modal.querySelector('#modal-cancel')?.addEventListener('click', () => modal.remove());
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  modal.querySelector('#modal-confirm')?.addEventListener('click', () => {
+    const stake = parseFloat(modal.querySelector('#stake-input')?.value);
+    const note  = modal.querySelector('#note-input')?.value?.trim() ?? null;
+
+    if (!stake || stake <= 0 || stake > bankroll) {
+      modal.querySelector('#stake-input')?.classList.add('input--error');
+      return;
+    }
+
+    PaperEngine.placeBet({
+      match_id:         match.id,
+      date:             match.date,
+      sport:            'NBA',
+      home:             match.home_team?.name ?? '—',
+      away:             match.away_team?.name ?? '—',
+      market,
+      side,
+      side_label:       sideLabel,
+      odds_taken:       odds,
+      stake,
+      kelly_stake:      kelly,
+      edge,
+      motor_prob:       motorProb,
+      implied_prob:     impliedProb,
+      confidence_level: analysis?.confidence_level ?? null,
+      data_quality:     analysis?.data_quality_score ?? null,
+      decision_note:    note,
+    });
+
+    // Notifier le store pour rafraîchir l'UI historique
+    storeInstance.set({ paperTradingVersion: (storeInstance.get('paperTradingVersion') ?? 0) + 1 });
+
+    modal.remove();
+    _showBetConfirmation(sideLabel, oddsStr, stake);
+  });
+}
+
+function _showBetConfirmation(sideLabel, oddsStr, stake) {
+  const toast = document.createElement('div');
+  toast.className   = 'toast toast--success';
+  toast.textContent = `✓ Pari enregistré : ${sideLabel} ${oddsStr} — ${stake.toFixed(2)} €`;
+  document.getElementById('toast-container')?.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
 
 function renderNoMatch(container) {
   container.innerHTML = `
