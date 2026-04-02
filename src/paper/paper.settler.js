@@ -22,7 +22,7 @@ export class PaperSettler {
    * @param {Store} store — pour notifier l'UI
    */
   static async settle(store) {
-    const state        = PaperEngine.load();
+    const state        = await PaperEngine.loadAsync();
     const pendingBets  = state.bets.filter(b => b.result === 'PENDING');
 
     if (pendingBets.length === 0) return;
@@ -54,7 +54,7 @@ export class PaperSettler {
           const outcome = _determineOutcome(bet, result);
           if (!outcome) continue;
 
-          PaperEngine.settleBet(bet.bet_id, outcome, null);
+          await PaperEngine.settleBet(bet.bet_id, outcome, null);
           settled++;
           Logger.info('PAPER_AUTO_SETTLED', {
             bet_id: bet.bet_id,
