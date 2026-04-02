@@ -86,16 +86,17 @@ export class DataOrchestrator {
         store.upsert('matches', match.id, { ...match, sport: 'NBA' });
       });
 
-      // ── ÉTAPE 2 : Injuries + BDL en parallèle ─────────────────────────
-      LoadingUI.update('Blessures + forme récente…', 20);
+      // ── ÉTAPE 2 : Injuries + BDL + Odds en parallèle ────────────────
+      LoadingUI.update('Blessures + forme récente + cotes…', 20);
 
       const season = _getCurrentNBASeason();
       const teamIds = _extractTeamIds(matches);
 
-      // Lancer injuries et BDL en parallèle
-      const [injuryReport, recentForms] = await Promise.all([
+      // Lancer les 3 sources en parallèle
+      const [injuryReport, recentForms, oddsComparison] = await Promise.all([
         _loadInjuries(date),
         _loadRecentForms(teamIds, season),
+        _loadOddsComparison(),
       ]);
 
       // ── ÉTAPE 3 : Analyser tous les matchs ────────────────────────────
@@ -105,6 +106,7 @@ export class DataOrchestrator {
         matches,
         recentForms,
         injuryReport,
+        oddsComparison,
         date,
         store
       );
@@ -155,6 +157,8 @@ export class DataOrchestrator {
       away_injuries:      awayInjuries?.length > 0 ? awayInjuries : null,
       odds:               match.odds ?? null,
       absences_confirmed: injuryReport !== null,
+      // Vraies cotes multi-books (The Odds API) — null si non disponibles
+      market_odds:        null, // injecté par _analyzeMatches
     };
   }
 
@@ -233,7 +237,7 @@ async function _loadRecentForms(teamIds, season) {
  * Analyse tous les matchs avec les données complètes.
  * Stocke les analyses dans le store.
  */
-async function _analyzeMatches(matches, recentForms, injuryReport, date, store) {
+async function _analyzeMatches(matches, recentForms, injuryReport, oddsComparison, date, store) {
   const analyses  = {};
   let conclusive  = 0;
   let rejected    = 0;
@@ -241,6 +245,16 @@ async function _analyzeMatches(matches, recentForms, injuryReport, date, store) 
   for (const match of matches) {
     try {
       const rawData  = DataOrchestrator.buildRawData(match, recentForms, injuryReport);
+
+      // Injecter les vraies cotes multi-books si disponibles
+      if (oddsComparison?.matches) {
+        const matchOdds = ProviderNBA.findMatchOdds(
+          oddsComparison,
+          match.home_team?.name,
+          match.away_team?.name
+        );
+        if (matchOdds) rawData.market_odds = matchOdds;
+      }
       const analysis = EngineCore.compute('NBA', rawData);
 
       const enriched = { ...analysis, match_id: match.id };
@@ -274,6 +288,16 @@ async function _analyzeMatches(matches, recentForms, injuryReport, date, store) 
 
   Logger.info('ORCHESTRATOR_DONE', { total: matches.length, conclusive, rejected });
   return analyses;
+}
+
+/** Charge les cotes multi-books depuis The Odds API */
+async function _loadOddsComparison() {
+  try {
+    return await ProviderNBA.getOddsComparison();
+  } catch (err) {
+    Logger.warn('ORCHESTRATOR_ODDS_FAILED', { message: err.message });
+    return null;
+  }
 }
 
 /** Calcule la saison NBA courante */
