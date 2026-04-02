@@ -1,61 +1,69 @@
 /**
- * MANI BET PRO — sports.config.js v2
+ * MANI BET PRO — sports.config.js v3
  *
- * Sources de données :
- *   ESPN API (gratuite, sans clé) → matchs + stats avancées + cotes DraftKings
- *   PDF NBA officiel (gratuit)     → injury reports (via Worker + Claude Haiku)
- *   BallDontLie v1 (avec clé)      → forme récente W/L
+ * Source unique de vérité pour les pondérations du moteur NBA.
+ * engine.nba.js ne contient plus aucune pondération hardcodée.
  *
- * Pondérations NBA activées — calibrables empiriquement.
- * La somme des poids actifs doit être égale à 1.0.
+ * CHANGEMENTS v3 :
+ *   - win_pct_diff : 0.30 → 0.15 (trop influencé par le calendrier)
+ *   - recent_form_ema : 0.15 → 0.25 (meilleur prédicteur court terme)
+ *   - home_away_split : 0.12 → 0.15 (avantage domicile NBA documenté ~60%)
+ *   - absences_impact : 0.01 → 0.10 (un star Out change fondamentalement le match)
+ *   - efg_diff : 0.35 → 0.30 (toujours dominant, légèrement réduit)
+ *   - ts_diff : 0.05 → 0.03 (redondant avec eFG%)
+ *   - avg_pts_diff : 0.02 → 0.02 (maintenu — biaisé pace, mais marginal)
+ *   Somme = 1.00 ✓
+ *
+ * Note : ces pondérations sont des hypothèses d'expert non calibrées empiriquement.
+ * Elles seront ajustées par optimisation Brier Score après 100+ paris (Sprint 6).
  */
 
 export const APP_CONFIG = {
-  VERSION: '0.2.0',
-  NAME: 'Mani Bet Pro',
+  VERSION: '0.3.0',
+  NAME:    'Mani Bet Pro',
   GITHUB_PAGES_URL: 'https://emmanueldelasse-droid.github.io/mani-bet-pro',
 };
 
 export const SPORTS_CONFIG = {
 
-  // ── NBA ──────────────────────────────────────────────────────────────────
+  // ── NBA ───────────────────────────────────────────────────────────────────
   NBA: {
-    label: 'NBA',
-    enabled: true,
+    label:           'NBA',
+    enabled:         true,
     sport_tag_class: 'sport-tag--nba',
 
     variables: [
-      { id: 'efg_diff',          label: 'eFG% différentiel',            critical: true  },
-      { id: 'ts_diff',           label: 'TS% différentiel',             critical: false },
-      { id: 'win_pct_diff',      label: 'Win% différentiel (saison)',   critical: true  },
-      { id: 'home_away_split',   label: 'Split Domicile/Extérieur',     critical: false },
-      { id: 'recent_form_ema',   label: 'Forme récente (EMA W/L)',      critical: false },
-      { id: 'absences_impact',   label: 'Impact absences (PDF NBA)',    critical: false },
-      { id: 'avg_pts_diff',      label: 'Points marqués (différentiel)',critical: false },
+      { id: 'efg_diff',        label: 'eFG% différentiel',             critical: true  },
+      { id: 'ts_diff',         label: 'TS% différentiel',              critical: false },
+      { id: 'win_pct_diff',    label: 'Win% différentiel (saison)',    critical: true  },
+      { id: 'home_away_split', label: 'Split Domicile/Extérieur',      critical: false },
+      { id: 'recent_form_ema', label: 'Forme récente (EMA W/L)',       critical: false },
+      { id: 'absences_impact', label: 'Impact absences (PDF NBA)',     critical: false },
+      { id: 'avg_pts_diff',    label: 'Points marqués (différentiel)', critical: false },
     ],
 
     /**
-     * Pondérations activées.
-     * Somme = 1.0. Ajuster empiriquement selon backtesting.
-     * Note : absences_impact pondéré à 0 tant que données non confirmées.
+     * Pondérations v3 — recommandées dans prompt de référence v3.
+     * Somme = 1.00.
+     * STATUT : hypothèses d'expert — calibration empirique prévue Sprint 6.
      */
     default_weights: {
-      efg_diff:        0.35,   // eFG% = meilleur proxy efficacité offensive ESPN
-      win_pct_diff:    0.30,   // Win% saison = indicateur de niveau général
-      recent_form_ema: 0.15,   // Forme récente (BallDontLie W/L)
-      home_away_split: 0.12,   // Split dom/ext ESPN
-      ts_diff:         0.05,   // TS% = complémentaire eFG%
-      avg_pts_diff:    0.02,   // Points/match = indicateur scoring
-      absences_impact: 0.01,   // Impact absences (PDF NBA) — faible tant que non calibré
+      efg_diff:        0.30,
+      recent_form_ema: 0.25,
+      home_away_split: 0.15,
+      win_pct_diff:    0.15,
+      absences_impact: 0.10,
+      ts_diff:         0.03,
+      avg_pts_diff:    0.02,
     },
 
-    ema_lambda: 0.85,   // Décroissance exponentielle forme récente
+    ema_lambda: 0.85,  // Décroissance exponentielle — proche de 1 = mémoire courte
 
     rejection_thresholds: {
-      min_robustness:             null,    // Non activé — à calibrer
-      min_data_quality:           null,    // Non activé — à calibrer
-      min_games_sample:           10,      // Minimum 10 matchs pour les stats
-      require_absences_confirmed: false,   // Ne pas rejeter si absences non confirmées
+      min_robustness:             null,   // Non activé — à calibrer empiriquement
+      min_data_quality:           null,   // Non activé — à calibrer empiriquement
+      min_games_sample:           10,
+      require_absences_confirmed: false,
     },
 
     sensitivity_steps: [-0.20, -0.10, 0.10, 0.20],
@@ -63,16 +71,16 @@ export const SPORTS_CONFIG = {
     modelisability:    'HIGH',
 
     simulator_defaults: {
-      use_h2h:        false,   // H2H non disponible en V2
-      use_absences:   true,
-      use_rest:       false,   // Repos non disponible sans schedule complet
+      use_h2h:      false,   // Non disponible — prévu Sprint 3
+      use_absences: true,
+      use_rest:     false,   // Non disponible sans schedule complet
     },
   },
 
-  // ── TENNIS ───────────────────────────────────────────────────────────────
+  // ── TENNIS ────────────────────────────────────────────────────────────────
   TENNIS: {
-    label: 'Tennis ATP/WTA',
-    enabled: false,
+    label:           'Tennis ATP/WTA',
+    enabled:         false,
     sport_tag_class: 'sport-tag--tennis',
 
     variables: [
@@ -96,15 +104,15 @@ export const SPORTS_CONFIG = {
     ema_lambda: null,
 
     rejection_thresholds: {
-      min_robustness:        null,
-      min_data_quality:      null,
-      min_games_sample:      8,
-      min_h2h_same_surface:  2,
+      min_robustness:       null,
+      min_data_quality:     null,
+      min_games_sample:     8,
+      min_h2h_same_surface: 2,
     },
 
     sensitivity_steps: [-0.20, -0.10, 0.10, 0.20],
-    intrinsic_noise: 'MEDIUM',
-    modelisability: 'HIGH',
+    intrinsic_noise:   'MEDIUM',
+    modelisability:    'HIGH',
 
     simulator_defaults: {
       use_h2h:           true,
@@ -115,17 +123,17 @@ export const SPORTS_CONFIG = {
 
   // ── MLB ───────────────────────────────────────────────────────────────────
   MLB: {
-    label: 'MLB',
-    enabled: false,
+    label:           'MLB',
+    enabled:         false,
     sport_tag_class: 'sport-tag--mlb',
 
     variables: [
-      { id: 'pitcher_fip_diff',  label: 'FIP différentiel pitchers',   critical: true  },
-      { id: 'lineup_wrc_diff',   label: 'wRC+ différentiel lineups',   critical: true  },
-      { id: 'bullpen_era_7d',    label: 'ERA Bullpen 7 derniers jours', critical: false },
-      { id: 'park_factor',       label: 'Park factor stade',            critical: false },
-      { id: 'home_away_split',   label: 'Domicile / Extérieur',         critical: false },
-      { id: 'rest_pitcher',      label: 'Repos pitcher titulaire',      critical: false },
+      { id: 'pitcher_fip_diff', label: 'FIP différentiel pitchers',    critical: true  },
+      { id: 'lineup_wrc_diff',  label: 'wRC+ différentiel lineups',    critical: true  },
+      { id: 'bullpen_era_7d',   label: 'ERA Bullpen 7 derniers jours', critical: false },
+      { id: 'park_factor',      label: 'Park factor stade',             critical: false },
+      { id: 'home_away_split',  label: 'Domicile / Extérieur',          critical: false },
+      { id: 'rest_pitcher',     label: 'Repos pitcher titulaire',       critical: false },
     ],
 
     default_weights: {
@@ -148,8 +156,8 @@ export const SPORTS_CONFIG = {
     },
 
     sensitivity_steps: [-0.20, -0.10, 0.10, 0.20],
-    intrinsic_noise: 'MEDIUM',
-    modelisability: 'HIGH',
+    intrinsic_noise:   'MEDIUM',
+    modelisability:    'HIGH',
 
     simulator_defaults: {
       use_park_factor: true,
@@ -158,26 +166,26 @@ export const SPORTS_CONFIG = {
     },
   },
 
-  // ── FOOTBALL (désactivé V1) ───────────────────────────────────────────────
+  // ── FOOTBALL (désactivé — bruit intrinsèque trop élevé en V1) ────────────
   FOOTBALL: {
-    label: 'Football (EPL / La Liga)',
-    enabled: false,
-    sport_tag_class: 'sport-tag--football',
+    label:                 'Football (EPL / La Liga)',
+    enabled:               false,
+    sport_tag_class:       'sport-tag--football',
     high_noise_disclaimer: true,
-    intrinsic_noise: 'HIGH',
-    modelisability: 'MEDIUM',
-    variables: [],
-    default_weights: {},
-    ema_lambda: null,
-    rejection_thresholds: { min_games_sample: 4 },
-    sensitivity_steps: [-0.25, -0.10, 0.10, 0.25],
-    simulator_defaults: { use_h2h: false },
+    intrinsic_noise:       'HIGH',
+    modelisability:        'MEDIUM',
+    variables:             [],
+    default_weights:       {},
+    ema_lambda:            null,
+    rejection_thresholds:  { min_games_sample: 4 },
+    sensitivity_steps:     [-0.25, -0.10, 0.10, 0.25],
+    simulator_defaults:    { use_h2h: false },
   },
 };
 
 export function getSportConfig(sport) {
   const config = SPORTS_CONFIG[sport];
-  if (!config) return null;
+  if (!config)         return null;
   if (!config.enabled) return null;
   return config;
 }
