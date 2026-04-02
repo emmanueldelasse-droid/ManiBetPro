@@ -93,6 +93,48 @@ export class ProviderNBA {
     return result;
   }
 
+  // ── COTES MULTI-BOOKS (The Odds API) ────────────────────────────────────
+
+  /**
+   * Récupère les cotes multi-books depuis The Odds API via le Worker.
+   * Cache TTL adaptatif selon l'heure (6h le jour, 2h le soir, 24h la nuit).
+   * @returns {Promise<OddsComparison|null>}
+   */
+  static async getOddsComparison() {
+    const cacheKey = ProviderCache.buildKey('nba', 'odds_comparison', {});
+    const cached   = ProviderCache.get(cacheKey);
+    if (cached) return cached;
+
+    const data = await this._fetch(
+      `${WORKER}/nba/odds/comparison`,
+      'ODDS_API',
+      '/nba/odds/comparison'
+    );
+
+    if (!data?.available) return null;
+
+    // TTL dynamique retourné par le Worker
+    const ttl = data.ttl_seconds ?? 7200;
+    ProviderCache.set(cacheKey, data, 'ODDS_COMPARISON');
+    return data;
+  }
+
+  /**
+   * Trouve les cotes multi-books pour un match spécifique.
+   * Matching par nom d'équipe.
+   * @param {OddsComparison} comparison
+   * @param {string} homeTeam
+   * @param {string} awayTeam
+   * @returns {object|null}
+   */
+  static findMatchOdds(comparison, homeTeam, awayTeam) {
+    if (!comparison?.matches) return null;
+    return comparison.matches.find(m =>
+      (m.home_team === homeTeam && m.away_team === awayTeam) ||
+      (m.home_team === awayTeam && m.away_team === homeTeam)
+    ) ?? null;
+  }
+
   // ── NORMALISATEUR ─────────────────────────────────────────────────────
 
   static _normalizeMatches(data, date) {
