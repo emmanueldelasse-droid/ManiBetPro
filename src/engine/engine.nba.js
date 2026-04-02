@@ -581,49 +581,53 @@ export class EngineNBA {
     }
 
     // ── SPREAD ────────────────────────────────────────────────────────────
+    // Approche : uniquement si vraie cote disponible depuis The Odds API.
+    // Edge = probabilité moteur de couvrir le spread vs probabilité implicite de la cote.
+    // Aucun calcul fictif — si pas de cote réelle, on ne recommande rien.
     if (odds.spread !== null) {
-      const spread      = odds.spread;
-      const motorMargin = (score - 0.5) * 30;
-      const spreadValue = motorMargin - (-spread);
+      const spread = odds.spread; // Ligne ESPN (ex: -5.5 = domicile favori)
 
-      // Edge en probabilité via distribution normale NBA (σ ≈ 12 pts)
-      // P(couvrir le spread) = Φ((motorMargin - (-spread)) / σ)
-      const SIGMA_NBA    = 12;
-      const z            = spreadValue / SIGMA_NBA;
-      const spreadProbCover = this._normalCDF(z);
-      const spreadEdge   = spreadProbCover - 0.5238; // ~52.38% = cote -110 sans vig
+      // Chercher les vraies cotes spread sur les deux côtés
+      const bestHomeSpread = this._getBestBookOdds(marketOdds, 'HOME', 'spreads');
+      const bestAwaySpread = this._getBestBookOdds(marketOdds, 'AWAY', 'spreads');
 
-      // Vraie cote spread depuis The Odds API
-      const bestSpreadBook = this._getBestBookOdds(marketOdds,
-        spreadValue > 0 ? 'HOME' : 'AWAY', 'spreads');
-      const spreadOddsReal = bestSpreadBook?.odds ?? null;
-      const spreadSource   = bestSpreadBook?.bookmaker ?? null;
+      // Choisir le côté avec le meilleur edge
+      // Edge = probabilité moteur - probabilité implicite de la cote réelle
+      for (const [side, bestBook] of [['HOME', bestHomeSpread], ['AWAY', bestAwaySpread]]) {
+        if (!bestBook) continue;
 
-      // N'afficher que si vraie cote disponible ET edge suffisant
-      if (Math.abs(spreadEdge) >= EDGE_THRESHOLDS.SPREAD && spreadOddsReal) {
-        const side       = spreadValue > 0 ? 'HOME' : 'AWAY';
-        const spreadLine = side === 'HOME' ? spread : -spread;
-        const kelly      = this._computeKelly(spreadProbCover, spreadOddsReal);
+        const motorProb   = side === 'HOME' ? pHome : pAway;
+        const impliedProb = this._decimalToProb(bestBook.decimalOdds);
+        const edge        = motorProb - impliedProb;
 
-        recs.push({
-          type:         'SPREAD',
-          label:        'Handicap (spread)',
-          side,
-          odds_line:    spreadOddsReal,     // Vraie cote du bookmaker
-          odds_source:  spreadSource,
-          spread_line:  spreadLine,          // Ligne de points
-          motor_prob:   Math.round(spreadProbCover * 100),
-          implied_prob: Math.round(this._americanToProb(spreadOddsReal) * 100),
-          edge:         Math.round(Math.abs(spreadEdge) * 100),
-          confidence:   this._edgeToConfidence(Math.abs(spreadEdge)),
-          has_value:    true,
-          note:         `Moteur estime ${Math.round(Math.abs(motorMargin))} pts d'écart vs spread ${spread > 0 ? '+' : ''}${spread}`,
-          kelly_stake:  kelly,
-        });
+        if (edge >= EDGE_THRESHOLDS.SPREAD) {
+          const spreadLine = side === 'HOME' ? spread : -spread;
+          const kelly      = this._computeKelly(motorProb, bestBook.odds);
+
+          recs.push({
+            type:         'SPREAD',
+            label:        'Handicap (spread)',
+            side,
+            odds_line:    bestBook.odds,          // Cote américaine (pour Kelly)
+            odds_decimal: bestBook.decimalOdds,   // Cote décimale française
+            odds_source:  bestBook.bookmaker,
+            spread_line:  spreadLine,             // Ligne de points (ex: +5.5)
+            motor_prob:   Math.round(motorProb * 100),
+            implied_prob: Math.round(impliedProb * 100),
+            edge:         Math.round(edge * 100),
+            confidence:   this._edgeToConfidence(edge),
+            has_value:    true,
+            note:         `Spread ${spreadLine > 0 ? '+' : ''}${spreadLine} · cote ${bestBook.decimalOdds} (${bestBook.bookmaker})`,
+            kelly_stake:  kelly,
+          });
+          break; // Prendre le meilleur côté uniquement
+        }
       }
     }
 
     // ── OVER/UNDER ────────────────────────────────────────────────────────
+    // Approche : projection pts (avg_pts ESPN) vs ligne bookmaker.
+    // Cote réelle depuis The Odds API — aucune cote fictive.
     if (odds.over_under !== null) {
       const homeAvgPts = matchData?.home_season_stats?.avg_pts;
       const awayAvgPts = matchData?.away_season_stats?.avg_pts;
@@ -632,30 +636,33 @@ export class EngineNBA {
         const projectedTotal = homeAvgPts + awayAvgPts;
         const ouLine         = odds.over_under;
         const diff           = projectedTotal - ouLine;
-        const ouEdgePct      = Math.abs(diff) / ouLine;
+        const side           = diff > 0 ? 'OVER' : 'UNDER';
 
-        // Vraie cote O/U depuis The Odds API
-        const side = diff > 0 ? 'OVER' : 'UNDER';
-        const bestOUBook  = this._getBestBookOdds(marketOdds, side, 'totals');
-        const ouOddsReal  = bestOUBook?.odds ?? null;
-        const ouSource    = bestOUBook?.bookmaker ?? null;
+        // Vraie cote depuis The Odds API uniquement
+        const bestOUBook = this._getBestBookOdds(marketOdds, side, 'totals');
+        if (!bestOUBook) return; // Pas de cote réelle → pas de recommandation
 
-        if (ouEdgePct >= EDGE_THRESHOLDS.OVER_UNDER && ouOddsReal) {
-          const kelly = this._computeKelly(0.52 + ouEdgePct / 2, ouOddsReal);
+        const motorProb   = 0.50 + Math.abs(diff) / 30; // Probabilité approximative
+        const impliedProb = this._decimalToProb(bestOUBook.decimalOdds);
+        const edge        = motorProb - impliedProb;
+
+        if (edge >= EDGE_THRESHOLDS.OVER_UNDER) {
+          const kelly = this._computeKelly(motorProb, bestOUBook.odds);
 
           recs.push({
             type:         'OVER_UNDER',
             label:        'Total de points',
             side,
-            odds_line:    ouOddsReal,    // Vraie cote du bookmaker
-            odds_source:  ouSource,
-            ou_line:      ouLine,        // Ligne de points
+            odds_line:    bestOUBook.odds,
+            odds_decimal: bestOUBook.decimalOdds,
+            odds_source:  bestOUBook.bookmaker,
+            ou_line:      ouLine,
             motor_prob:   Math.round(projectedTotal),
             implied_prob: Math.round(ouLine),
-            edge:         Math.round(ouEdgePct * 100),
-            confidence:   this._edgeToConfidence(ouEdgePct),
+            edge:         Math.round(edge * 100),
+            confidence:   this._edgeToConfidence(edge),
             has_value:    true,
-            note:         `Moteur projette ${Math.round(projectedTotal)} pts total vs ligne ${ouLine}`,
+            note:         `Projection ${Math.round(projectedTotal)} pts · ligne ${ouLine} · cote ${bestOUBook.decimalOdds} (${bestOUBook.bookmaker})`,
             kelly_stake:  kelly,
           });
         }
@@ -793,6 +800,12 @@ export class EngineNBA {
    * Fonction de distribution normale cumulative (approximation).
    * Utilisée pour convertir l'écart moteur/spread en probabilité.
    */
+  /** Cote décimale → probabilité implicite */
+  static _decimalToProb(decimal) {
+    if (!decimal || decimal <= 1) return 0;
+    return 1 / decimal;
+  }
+
   static _normalCDF(z) {
     const t = 1 / (1 + 0.2316419 * Math.abs(z));
     const d = 0.3989423 * Math.exp(-z * z / 2);
