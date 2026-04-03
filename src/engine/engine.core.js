@@ -88,6 +88,12 @@ export class EngineCore {
       dataQuality.score
     );
 
+    const decision = this._computeDecision(
+      confidenceLevel,
+      engineResult.betting_recommendations,
+      dataQuality.score
+    );
+
     const analysis = {
       analysis_id:          crypto.randomUUID(),
       sport,
@@ -101,6 +107,7 @@ export class EngineCore {
       volatility_index:     engineResult.volatility,
 
       confidence_level:     confidenceLevel,
+      decision,
       rejection_reason:     null,
 
       key_signals:  engineResult.signals.filter(s => Math.abs(s.contribution) > 0.02),
@@ -124,11 +131,31 @@ export class EngineCore {
     Logger.engineResult({
       sport,
       analysisId:      analysis.analysis_id,
-      confidenceLevel: analysis.confidence_level,
+      decision:        analysis.decision,
       rejectionReason: null,
     });
 
     return analysis;
+  }
+
+  // ── DÉCISION ORIENTÉE UI ──────────────────────────────────────────────
+
+  /**
+   * Calcule le champ decision lisible par l'UI.
+   * 'ANALYSER'    — edge ≥ 7%, qualité ≥ 75%, confiance HIGH
+   * 'EXPLORER'    — edge présent mais qualité ou confiance insuffisante
+   * 'INSUFFISANT' — pas d'edge détecté
+   * 'REJETÉ'      — rejet moteur (géré dans _buildRejected)
+   */
+  static _computeDecision(confidenceLevel, bettingRecs, dataQualityScore) {
+    const best    = bettingRecs?.best;
+    const edge    = best?.edge ?? 0;
+    const quality = dataQualityScore ?? 0;
+
+    if (confidenceLevel === 'INCONCLUSIVE') return 'INSUFFISANT';
+    if (!best || edge < 5)                  return 'INSUFFISANT';
+    if (edge >= 7 && quality >= 0.75 && confidenceLevel === 'HIGH') return 'ANALYSER';
+    return 'EXPLORER';
   }
 
   // ── VÉRIFICATIONS DE REJET ────────────────────────────────────────────
@@ -251,7 +278,7 @@ export class EngineCore {
     Logger.engineResult({
       sport,
       analysisId:      null,
-      confidenceLevel: 'INCONCLUSIVE',
+      decision:        'INSUFFISANT',
       rejectionReason: reason,
     });
 
@@ -268,6 +295,7 @@ export class EngineCore {
       volatility_index:     null,
 
       confidence_level:     'INCONCLUSIVE',
+      decision:             'INSUFFISANT',
       rejection_reason:     reason,
 
       key_signals:          [],
