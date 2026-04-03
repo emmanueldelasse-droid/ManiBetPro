@@ -204,8 +204,8 @@ async function _loadInjuries(date) {
  */
 async function _loadRecentForms(teamIds, season) {
   const forms = {};
-  const BATCH_SIZE  = 3;
-  const BATCH_DELAY = 500; // ms entre les lots
+  const BATCH_SIZE  = 6;    // augmenté — BDL supporte 60 req/min
+  const BATCH_DELAY = 200;  // réduit — inutile d'attendre 500ms
 
   for (let i = 0; i < teamIds.length; i += BATCH_SIZE) {
     const batch = teamIds.slice(i, i + BATCH_SIZE);
