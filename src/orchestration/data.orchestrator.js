@@ -154,7 +154,11 @@ export class DataOrchestrator {
       odds:               match.odds || null,
       absences_confirmed: injuryReport !== null,
       advanced_stats:     advancedStats || null,
-      market_odds:        null, // injecte par _analyzeMatches
+      market_odds:        null,
+      home_back_to_back:  _isBackToBack(homeRecent, match.date || match.datetime),
+      away_back_to_back:  _isBackToBack(awayRecent, match.date || match.datetime),
+      home_rest_days:     _computeRestDays(homeRecent, match.date || match.datetime),
+      away_rest_days:     _computeRestDays(awayRecent, match.date || match.datetime),
     };
   }
 
@@ -311,6 +315,31 @@ async function _analyzeMatches(matches, recentForms, injuryReport, oddsCompariso
 
   Logger.info('ORCHESTRATOR_DONE', { total: matches.length, conclusive, rejected });
   return analyses;
+}
+
+function _isBackToBack(recentForm, matchDate) {
+  if (!recentForm || !recentForm.matches || !recentForm.matches.length || !matchDate) return null;
+  var lastDate = recentForm.matches[0].date;
+  if (!lastDate) return null;
+  var last = new Date(lastDate + 'T12:00:00');
+  var curr = new Date(_normalizeDate(String(matchDate)) + 'T12:00:00');
+  return Math.round((curr - last) / 86400000) === 1;
+}
+
+function _computeRestDays(recentForm, matchDate) {
+  if (!recentForm || !recentForm.matches || !recentForm.matches.length || !matchDate) return null;
+  var lastDate = recentForm.matches[0].date;
+  if (!lastDate) return null;
+  var last = new Date(lastDate + 'T12:00:00');
+  var curr = new Date(_normalizeDate(String(matchDate)) + 'T12:00:00');
+  var diff = Math.round((curr - last) / 86400000);
+  return diff > 1 ? diff - 1 : 0;
+}
+
+function _normalizeDate(s) {
+  if (!s) return '';
+  if (s.length === 8 && !s.includes('-')) return s.slice(0,4) + '-' + s.slice(4,6) + '-' + s.slice(6,8);
+  return s.slice(0, 10);
 }
 
 function _getCurrentNBASeason() {
