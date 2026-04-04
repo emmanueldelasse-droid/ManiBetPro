@@ -461,10 +461,11 @@ export class EngineNBA {
     const marketOdds = matchData?.market_odds ?? null;
 
     // Construire les cotes de référence.
-    // Priorité : Pinnacle (The Odds API) > ESPN DraftKings.
-    // Pinnacle a le vig le plus faible — meilleur proxy du marché réel.
-    // Sans cotes ESPN (fréquent en journée), on utilise directement Pinnacle.
-    const pinnacle = marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
+    // Priorité : Winamax (bookmaker principal) > Pinnacle > premier disponible.
+    // Winamax = cotes réelles disponibles pour parier.
+    // Pinnacle = fallback si Winamax absent (marché le plus efficient).
+    const pinnacle = marketOdds?.bookmakers?.find(b => b.key === 'winamax')
+                  ?? marketOdds?.bookmakers?.find(b => b.key === 'pinnacle')
                   ?? marketOdds?.bookmakers?.[0]
                   ?? null;
 
@@ -618,12 +619,35 @@ export class EngineNBA {
 
   static _getBestBookOdds(marketOdds, side, market) {
     if (!marketOdds?.bookmakers?.length) return null;
+
+    // Priorité bookmaker : Winamax > Pinnacle > meilleure cote disponible
+    // Winamax = bookmaker principal pour le pari réel
+    // Pinnacle = fallback marché efficient si Winamax absent
+    const PRIORITY = ['winamax', 'pinnacle', 'betclic', 'unibet_eu', 'betsson', 'bet365'];
+
+    const _getOdds = (bk) => {
+      if (market === 'h2h')      return side === 'HOME' ? bk.home_ml : bk.away_ml;
+      if (market === 'spreads')  return side === 'HOME' ? bk.home_spread : bk.home_spread;
+      if (market === 'totals')   return side === 'OVER' ? bk.over_total : bk.over_total;
+      return null;
+    };
+
+    // Chercher d'abord dans l'ordre de priorité
+    for (const key of PRIORITY) {
+      const bk = marketOdds.bookmakers.find(b => b.key === key);
+      if (!bk) continue;
+      const oddsDecimal = _getOdds(bk);
+      if (!oddsDecimal || oddsDecimal <= 1) continue;
+      const american = oddsDecimal >= 2
+        ? Math.round((oddsDecimal - 1) * 100)
+        : Math.round(-100 / (oddsDecimal - 1));
+      return { odds: american, decimalOdds: oddsDecimal, bookmaker: bk.title ?? bk.key };
+    }
+
+    // Fallback : meilleure cote disponible tous bookmakers
     let best = null;
     for (const bk of marketOdds.bookmakers) {
-      let oddsDecimal = null;
-      if (market === 'h2h')     oddsDecimal = side === 'HOME' ? bk.home_ml : bk.away_ml;
-      else if (market === 'spreads') oddsDecimal = bk.home_spread ?? null;
-      else if (market === 'totals')  oddsDecimal = side === 'OVER' ? bk.over_total : null;
+      const oddsDecimal = _getOdds(bk);
       if (!oddsDecimal || oddsDecimal <= 1) continue;
       const american = oddsDecimal >= 2 ? Math.round((oddsDecimal - 1) * 100) : Math.round(-100 / (oddsDecimal - 1));
       if (!best || oddsDecimal > best.decimalOdds) {
