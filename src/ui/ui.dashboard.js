@@ -1,14 +1,19 @@
 /**
- * MANI BET PRO — ui.dashboard.js v2
+ * MANI BET PRO — ui.dashboard.js v3
+ *
+ * AMÉLIORATIONS v3 :
+ *   - Labels recommandations plus clairs : 'Vainqueur du match', 'Handicap (points)', 'Total de points'
+ *   - Cotes décimales avec source intégrée et tooltip explicatif
+ *   - Edge coloré en 3 niveaux : vert ≥12%, orange ≥7%, gris <7%
+ *   - Meilleure opportunité : "Parier sur X · cote Y"
+ *   - Net Rating affiché sur les cartes si disponible
  *
  * CORRECTIONS v2 :
  *   - Cartes affichent probabilité moteur en % (P_moteur vs P_marché)
- *     au lieu des barres "Signal / Robustesse" non parlantes
- *   - Filtre O(1) : index par match_id au lieu de Object.values().find() O(n)
- *   - Badges alignés sur decision ('ANALYSER'|'EXPLORER'|'INSUFFISANT'|'REJETÉ')
- *     au lieu de confidence_level ('INCONCLUSIVE')
- *   - Bordure carte selon décision, pas uniquement selon edge
- *   - spread_line transmis au modal paper betting (correctif paper.settler.js)
+ *   - Filtre O(1) : index par match_id
+ *   - Badges alignés sur decision
+ *   - Bordure carte selon décision
+ *   - spread_line transmis au modal paper betting
  */
 
 import { router }           from './ui.router.js';
@@ -21,10 +26,7 @@ import { americanToDecimal, formatEdge } from '../utils/utils.odds.js';
 // ── POINT D'ENTRÉE ────────────────────────────────────────────────────────
 
 export async function render(container, storeInstance) {
-  // Démarrage sur aujourd'hui — les matchs ESPN du jour sont les matchs du soir
-  // (calendrier NBA en heure ET = nuit heure française)
   let selectedDate = storeInstance.get('dashboardFilters')?.selectedDate ?? _getTodayDate();
-
 
   container.innerHTML = _renderShell(selectedDate);
   _bindFilterEvents(container, storeInstance);
@@ -55,7 +57,6 @@ async function _loadAndDisplay(container, storeInstance, date) {
       return;
     }
 
-    // Index analyses par match_id — O(1) pour les filtres
     const analysisIndex = _buildAnalysisIndex(result.analyses);
 
     _renderMatchCards(list, result.matches, storeInstance);
@@ -90,10 +91,6 @@ async function _loadAndDisplay(container, storeInstance, date) {
 
 // ── INDEX DES ANALYSES ────────────────────────────────────────────────────
 
-/**
- * Construit un index { [match_id]: analysis } depuis l'objet analyses.
- * Évite le Object.values().find() O(n) à chaque filtre.
- */
 function _buildAnalysisIndex(analyses) {
   if (!analyses) return {};
   const index = {};
@@ -105,10 +102,6 @@ function _buildAnalysisIndex(analyses) {
   return index;
 }
 
-/**
- * Compatibilité : calcule decision depuis confidence_level pour les
- * analyses produites avant la v4 du moteur.
- */
 function _legacyDecision(analysis) {
   if (!analysis) return 'INSUFFISANT';
   if (analysis.confidence_level === 'INCONCLUSIVE' || analysis.confidence_level === null) {
@@ -126,8 +119,8 @@ function _renderShell(selectedDate) {
   const displayDate = new Date(selectedDate + 'T12:00:00').toLocaleDateString('fr-FR', {
     weekday: 'long', day: 'numeric', month: 'long',
   });
-  const today     = _getTodayDate();
-  const tomorrow  = _offsetDate(today, 1);
+  const today    = _getTodayDate();
+  const tomorrow = _offsetDate(today, 1);
 
   return `
     <div class="dashboard">
@@ -138,16 +131,14 @@ function _renderShell(selectedDate) {
         <div class="page-header__sub">${displayDate}</div>
       </div>
 
-      <!-- Sélecteur de date -->
       <div class="date-selector filter-chips" id="date-selector">
-        <button class="chip ${selectedDate === today     ? 'chip--active' : ''}" data-date="${today}">Aujourd'hui</button>
-        <button class="chip ${selectedDate === tomorrow  ? 'chip--active' : ''}" data-date="${tomorrow}">Demain</button>
+        <button class="chip ${selectedDate === today    ? 'chip--active' : ''}" data-date="${today}">Aujourd'hui</button>
+        <button class="chip ${selectedDate === tomorrow ? 'chip--active' : ''}" data-date="${tomorrow}">Demain</button>
         <input type="date" id="date-picker" value="${selectedDate}"
           style="background:var(--color-card);border:1px solid var(--color-border);color:var(--color-text);border-radius:20px;padding:4px 12px;font-size:12px;cursor:pointer;"
         />
       </div>
 
-      <!-- Résumé -->
       <div class="dashboard__summary" id="day-summary">
         <div class="summary-card" id="summary-total">
           <div class="summary-card__value">—</div>
@@ -163,7 +154,6 @@ function _renderShell(selectedDate) {
         </div>
       </div>
 
-      <!-- Filtres -->
       <div class="dashboard__filters">
         <div class="filter-row">
           <span class="filter-label">Sport</span>
@@ -192,10 +182,8 @@ function _renderShell(selectedDate) {
         </div>
       </div>
 
-      <!-- Meilleure opportunité -->
       <div id="best-opportunity" style="display:none"></div>
 
-      <!-- Liste matchs -->
       <div class="dashboard__matches" id="matches-list">
         <div class="loading-state">
           <div class="loader__spinner"></div>
@@ -240,7 +228,7 @@ function _createMatchCard(match) {
   card.innerHTML = `
     <div class="match-card__header">
       <span class="sport-tag sport-tag--nba">NBA</span>
-      <span class="match-card__time text-muted">${isFinal ? "Terminé" : time}</span>
+      <span class="match-card__time text-muted">${isFinal ? 'Terminé' : time}</span>
       <span class="match-card__status-badge badge badge--inconclusive" id="badge-${match.id}">
         ${isFinal ? 'Final' : 'Analyse…'}
       </span>
@@ -265,7 +253,7 @@ function _createMatchCard(match) {
       </div>
     </div>
 
-    <!-- Probabilités — remplies par updateMatchCard après analyse -->
+    <!-- Probabilités -->
     <div id="proba-${match.id}" class="match-card__proba" style="display:none">
       <div class="match-card__proba-side" id="proba-home-${match.id}">
         <span class="match-card__proba-motor" id="motor-home-${match.id}">—%</span>
@@ -280,7 +268,7 @@ function _createMatchCard(match) {
       </div>
     </div>
 
-    <!-- Edge -->
+    <!-- Edge + qualité -->
     <div id="edge-${match.id}" style="display:none" class="match-card__edge">
       <span class="text-muted" style="font-size:10px">EDGE</span>
       <span class="match-card__edge-value" id="edge-val-${match.id}">—</span>
@@ -293,7 +281,7 @@ function _createMatchCard(match) {
       <span class="mono">Spread ${spread} · O/U ${ou}</span>
     </div>` : ''}
 
-    <!-- Paris recommandés — remplis par _updateMatchCard -->
+    <!-- Paris recommandés -->
     <div id="recs-${match.id}" class="match-card__recs" style="display:none"></div>
 
     <button class="btn btn--ghost match-card__cta" data-match-id="${match.id}">
@@ -320,7 +308,7 @@ function _updateMatchCard(list, matchId, analysis, match) {
     badge.className   = `match-card__status-badge badge ${cfg.cssClass}`;
   }
 
-  // Bordure carte selon décision
+  // Bordure carte
   const card = list.querySelector(`[data-match-id="${matchId}"]`);
   if (card) {
     const borderColors = {
@@ -335,16 +323,16 @@ function _updateMatchCard(list, matchId, analysis, match) {
     }
   }
 
-  // Probabilités moteur vs marché
+  // Probabilités moteur
   const probaBlock = list.querySelector(`#proba-${matchId}`);
   if (probaBlock && analysis.predictive_score !== null) {
     const homeProb = Math.round(analysis.predictive_score * 100);
     const awayProb = 100 - homeProb;
 
-    const motorHome   = list.querySelector(`#motor-home-${matchId}`);
-    const motorAway   = list.querySelector(`#motor-away-${matchId}`);
-    const marketHome  = list.querySelector(`#market-home-${matchId}`);
-    const marketAway  = list.querySelector(`#market-away-${matchId}`);
+    const motorHome  = list.querySelector(`#motor-home-${matchId}`);
+    const motorAway  = list.querySelector(`#motor-away-${matchId}`);
+    const marketHome = list.querySelector(`#market-home-${matchId}`);
+    const marketAway = list.querySelector(`#market-away-${matchId}`);
 
     if (motorHome) {
       motorHome.textContent = `${homeProb}%`;
@@ -355,21 +343,15 @@ function _updateMatchCard(list, matchId, analysis, match) {
       motorAway.className   = `match-card__proba-motor${awayProb > homeProb ? ' match-card__proba-motor--fav' : ''}`;
     }
 
-    // Probabilité marché (vig-free depuis Pinnacle si disponible)
     const marketProbHome = analysis.betting_recommendations?.market_prob_home;
     const marketProbAway = analysis.betting_recommendations?.market_prob_away;
-
-    if (marketHome && marketProbHome != null) {
-      marketHome.textContent = `Marché ${Math.round(marketProbHome * 100)}%`;
-    }
-    if (marketAway && marketProbAway != null) {
-      marketAway.textContent = `Marché ${Math.round(marketProbAway * 100)}%`;
-    }
+    if (marketHome && marketProbHome != null) marketHome.textContent = `Marché ${Math.round(marketProbHome * 100)}%`;
+    if (marketAway && marketProbAway != null) marketAway.textContent = `Marché ${Math.round(marketProbAway * 100)}%`;
 
     probaBlock.style.display = '';
   }
 
-  // Edge + qualité données
+  // Edge + qualité — 3 niveaux de couleur
   const edgeBlock = list.querySelector(`#edge-${matchId}`);
   const edgeVal   = list.querySelector(`#edge-val-${matchId}`);
   const qualVal   = list.querySelector(`#quality-val-${matchId}`);
@@ -380,11 +362,11 @@ function _updateMatchCard(list, matchId, analysis, match) {
 
     if (edgeVal) {
       edgeVal.textContent = `+${best.edge}%`;
-      edgeVal.style.color = best.edge >= 10
+      edgeVal.style.color = best.edge >= 12
         ? 'var(--color-success)'
         : best.edge >= 7
         ? 'var(--color-warning)'
-        : 'var(--color-text-secondary)';
+        : 'var(--color-muted)';
     }
 
     if (qualVal && analysis.data_quality_score != null) {
@@ -398,33 +380,68 @@ function _updateMatchCard(list, matchId, analysis, match) {
     }
   }
 
-  // Paris recommandés — affiché directement sur la carte
+  // Net Rating — affiché discrètement si disponible
+  const netRating = analysis.variables_used?.net_rating_diff?.value;
+  if (card && netRating != null) {
+    const existing = card.querySelector('.match-card__net-rating');
+    if (!existing) {
+      const nr = document.createElement('div');
+      nr.className = 'match-card__net-rating text-muted';
+      nr.style.cssText = 'font-size:10px;margin-top:2px;opacity:0.7';
+      const sign = netRating > 0 ? '+' : '';
+      nr.textContent = `NET RTG ${sign}${netRating.toFixed(1)}`;
+      nr.style.color = netRating > 3
+        ? 'var(--color-success)'
+        : netRating < -3
+        ? 'var(--color-danger)'
+        : 'var(--color-muted)';
+      const probaEl = list.querySelector(`#proba-${matchId}`);
+      if (probaEl) probaEl.after(nr);
+    }
+  }
+
+  // Paris recommandés — vocabulaire simplifié + cotes lisibles
   const recsContainer = list.querySelector(`#recs-${matchId}`);
   const recs = analysis.betting_recommendations?.recommendations ?? [];
 
   if (recsContainer && recs.length > 0) {
     recsContainer.innerHTML = recs.slice(0, 3).map(rec => {
-      const typeLabel = rec.type === 'MONEYLINE' ? 'Vainqueur'
-                      : rec.type === 'SPREAD'    ? 'Handicap'
-                      : 'Total pts';
+
+      // Label du type de pari — vocabulaire simple
+      const typeLabel = rec.type === 'MONEYLINE' ? 'Vainqueur du match'
+                      : rec.type === 'SPREAD'    ? 'Handicap (points)'
+                      : 'Total de points';
+
+      // Équipe ou côté
       const sideLabel = rec.type === 'MONEYLINE'
         ? (rec.side === 'HOME' ? match.home_team?.abbreviation : match.away_team?.abbreviation)
         : rec.type === 'SPREAD'
         ? (rec.side === 'HOME'
             ? `${match.home_team?.abbreviation} ${rec.spread_line > 0 ? '+' : ''}${rec.spread_line}`
-            : `${match.away_team?.abbreviation} ${rec.spread_line > 0 ? '+' : ''}${rec.spread_line}`)
-        : rec.side;
+            : `${match.away_team?.abbreviation} ${-rec.spread_line > 0 ? '+' : ''}${-rec.spread_line}`)
+        : rec.side === 'OVER' ? '+ de points' : '- de points';
+
+      // Cote décimale
       const oddsDecimal = rec.odds_decimal ?? (rec.odds_line > 0
-        ? (rec.odds_line / 100 + 1).toFixed(2)
-        : (1 - 100 / rec.odds_line).toFixed(2));
-      const edgeColor = rec.edge >= 10 ? 'var(--color-success)'
+        ? (rec.odds_line / 100 + 1)
+        : (1 - 100 / rec.odds_line));
+      const oddsFormatted = Number(oddsDecimal).toFixed(2);
+
+      // Gain pour 100€
+      const gainPour100 = Math.round((oddsDecimal - 1) * 100);
+      const oddsTooltip = `Cote ${oddsFormatted} = gain de ${gainPour100}€ pour 100€ misés`;
+
+      // Couleur edge
+      const edgeColor = rec.edge >= 12 ? 'var(--color-success)'
                       : rec.edge >= 7  ? 'var(--color-warning)'
-                      : 'var(--color-text-secondary)';
-      return `<div class="match-card__rec">
+                      : 'var(--color-muted)';
+
+      return `<div class="match-card__rec" title="${oddsTooltip}">
         <span class="match-card__rec-type text-muted">${typeLabel}</span>
         <span class="match-card__rec-side">${sideLabel}</span>
-        <span class="match-card__rec-odds mono">${Number(oddsDecimal).toFixed(2)}</span>
-        <span class="match-card__rec-source text-muted">${rec.odds_source ?? ''}</span>
+        <span class="match-card__rec-odds mono">${oddsFormatted}
+          <span style="font-size:9px;color:var(--color-muted);margin-left:2px">${rec.odds_source ?? ''}</span>
+        </span>
         <span class="match-card__rec-edge" style="color:${edgeColor}">+${rec.edge}%</span>
       </div>`;
     }).join('');
@@ -469,15 +486,16 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
 
   if (!bestMatch || bestEdge < 5) { el.style.display = 'none'; return; }
 
-  const best       = bestAnalysis.betting_recommendations.best;
-  const SIDE_MAP   = {
+  const best = bestAnalysis.betting_recommendations.best;
+  const SIDE_MAP = {
     HOME:  bestMatch.home_team?.name,
     AWAY:  bestMatch.away_team?.name,
-    OVER:  'Over',
-    UNDER: 'Under',
+    OVER:  '+ de points',
+    UNDER: '- de points',
   };
-  const sideLabel  = SIDE_MAP[best.side] ?? best.side;
+  const sideLabel   = SIDE_MAP[best.side] ?? best.side;
   const oddsDecimal = americanToDecimal(best.odds_line) ?? '—';
+  const gainPour100 = oddsDecimal !== '—' ? Math.round((oddsDecimal - 1) * 100) : null;
 
   el.style.display = 'block';
   el.innerHTML = `
@@ -498,12 +516,12 @@ function _renderBestOpportunity(container, matches, analysisIndex) {
             ${bestMatch.home_team?.abbreviation} vs ${bestMatch.away_team?.abbreviation}
           </div>
           <div style="font-size:12px;color:var(--color-muted);margin-top:2px">
-            ${sideLabel} · ${oddsDecimal}
+            Parier sur ${sideLabel} · cote ${oddsDecimal}${gainPour100 ? ` (+${gainPour100}€ / 100€)` : ''}
           </div>
         </div>
         <div style="text-align:right">
           <div style="font-size:20px;font-weight:700;color:var(--color-success)">+${bestEdge}%</div>
-          <div style="font-size:10px;color:var(--color-muted)">edge</div>
+          <div style="font-size:10px;color:var(--color-muted)">avantage estimé</div>
         </div>
       </div>
     </div>
@@ -540,7 +558,6 @@ function _bindDateSelector(container, storeInstance, initialDate, onDateChange) 
 }
 
 function _bindFilterEvents(container, storeInstance) {
-  // Délégation unique sur le container — O(1) par clic
   container.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
@@ -550,7 +567,6 @@ function _bindFilterEvents(container, storeInstance) {
     parent.querySelectorAll('.chip').forEach(c => c.classList.remove('chip--active'));
     chip.classList.add('chip--active');
 
-    // Récupérer l'index courant depuis le store
     const analyses = storeInstance.get('analyses') ?? {};
     const analysisIndex = _buildAnalysisIndex(analyses);
 
@@ -560,10 +576,6 @@ function _bindFilterEvents(container, storeInstance) {
   });
 }
 
-/**
- * Applique un filtre en O(n) sur les cartes visibles.
- * L'index analysisIndex évite le O(n²) de l'ancienne version.
- */
 function _applyFilter(container, storeInstance, filterType, value, analysisIndex) {
   const matches = storeInstance.get('matches') ?? {};
 
@@ -584,7 +596,7 @@ function _applyFilter(container, storeInstance, filterType, value, analysisIndex
     }
 
     if (filterType === 'edge' && value !== '0') {
-      const minEdge = parseInt(value);
+      const minEdge  = parseInt(value);
       const bestEdge = analysis?.betting_recommendations?.best?.edge ?? 0;
       visible = bestEdge >= minEdge;
     }
