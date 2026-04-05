@@ -119,8 +119,9 @@ export class EngineCore {
       robustness_breakdown:    robustness,
       data_quality_breakdown:  dataQuality,
 
-      model_disagreement: null,  // V2 — Sprint 6
+model_disagreement: null,  // V2 — Sprint 6
 
+      variables_used:          engineResult.variables_used ?? {},
       betting_recommendations: engineResult.betting_recommendations ?? null,
 
       explanation_context: this._buildExplanationContext(
